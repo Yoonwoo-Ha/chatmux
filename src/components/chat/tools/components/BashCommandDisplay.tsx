@@ -19,8 +19,9 @@ interface BashCommandDisplayProps {
 
 /**
  * Codex-in-VSCode style command row: a compact, single-line command with a
- * chevron on the left. When the command produced output, the row becomes a
- * dropdown that expands to reveal the output inline. Theme-integrated surfaces
+ * chevron on the left. When the command produced output, or when the command
+ * itself spans several lines, the row becomes a dropdown that expands to reveal
+ * the whole command and its output inline. Theme-integrated surfaces
  * keep it clean in both light and dark mode; consecutive commands stack tightly
  * into a clean list.
  */
@@ -35,6 +36,12 @@ export const BashCommandDisplay: React.FC<BashCommandDisplayProps> = ({
   const trimmedOutput = (output || '').replace(/\s+$/, '');
   const hasOutput = trimmedOutput.length > 0;
   const outputLineCount = hasOutput ? trimmedOutput.split('\n').length : 0;
+  // A heredoc or a multi-line script is one command, so the collapsed row shows
+  // its first line and counts the rest instead of growing to the script's
+  // height. The row stays expandable even when the command produced no output.
+  const commandLines = command.split('\n');
+  const hiddenCommandLines = commandLines.length - 1;
+  const canExpand = hasOutput || hiddenCommandLines > 0;
   const isRunning = status === 'running';
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -51,7 +58,7 @@ export const BashCommandDisplay: React.FC<BashCommandDisplayProps> = ({
   }, [hasOutput, defaultOpen]);
 
   const toggle = () => {
-    if (hasOutput) {
+    if (canExpand) {
       setOpen((prev) => !prev);
     }
   };
@@ -69,32 +76,32 @@ export const BashCommandDisplay: React.FC<BashCommandDisplayProps> = ({
       className={cn(
         'group/cmd overflow-hidden rounded-lg border bg-muted/40 backdrop-blur-sm transition-all duration-200',
         isError ? 'border-red-500/30' : 'border-border/60',
-        hasOutput && !open && 'hover:border-border hover:bg-muted/60',
+        canExpand && !open && 'hover:border-border hover:bg-muted/60',
         open && 'bg-muted/50 shadow-sm',
       )}
     >
-      {/* Command header — clickable when there is output to expand */}
+      {/* Command header — clickable when output or more command lines follow */}
       <div
-        role={hasOutput ? 'button' : undefined}
-        tabIndex={hasOutput ? 0 : undefined}
-        aria-expanded={hasOutput ? open : undefined}
+        role={canExpand ? 'button' : undefined}
+        tabIndex={canExpand ? 0 : undefined}
+        aria-expanded={canExpand ? open : undefined}
         onClick={toggle}
         onKeyDown={(event) => {
-          if (hasOutput && (event.key === 'Enter' || event.key === ' ')) {
+          if (canExpand && (event.key === 'Enter' || event.key === ' ')) {
             event.preventDefault();
             toggle();
           }
         }}
         className={cn(
           'flex items-center gap-2 px-2.5 py-1.5 outline-none',
-          hasOutput && 'cursor-pointer focus-visible:ring-1 focus-visible:ring-ring',
+          canExpand && 'cursor-pointer focus-visible:ring-1 focus-visible:ring-ring',
         )}
       >
         <ChevronRight
           className={cn(
             'h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/70 transition-transform duration-200',
             open && 'rotate-90',
-            !hasOutput && 'opacity-0',
+            !canExpand && 'opacity-0',
           )}
         />
         <span className="flex-shrink-0 select-none font-mono text-xs font-semibold text-emerald-500 dark:text-emerald-400">
@@ -106,13 +113,21 @@ export const BashCommandDisplay: React.FC<BashCommandDisplayProps> = ({
             open ? 'whitespace-pre-wrap break-all' : 'truncate',
           )}
         >
-          {command}
+          {open ? command : commandLines[0]}
         </code>
 
         {isRunning && (
           <span className="h-2.5 w-2.5 flex-shrink-0 animate-spin rounded-full border-[1.5px] border-muted-foreground/30 border-t-emerald-400" />
         )}
         {status && status !== 'running' && <ToolStatusBadge status={status} className="flex-shrink-0" />}
+        {!open && hiddenCommandLines > 0 && (
+          <span
+            className="flex-shrink-0 text-[10px] tabular-nums text-muted-foreground/70"
+            title={`${hiddenCommandLines} more command ${hiddenCommandLines === 1 ? 'line' : 'lines'}`}
+          >
+            +{hiddenCommandLines}
+          </span>
+        )}
         {!open && hasOutput && !isRunning && (
           <span className="flex-shrink-0 text-[10px] tabular-nums text-muted-foreground/70 transition-opacity group-hover/cmd:opacity-0">
             {outputLineCount} {outputLineCount === 1 ? 'line' : 'lines'}

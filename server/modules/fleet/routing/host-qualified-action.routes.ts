@@ -6,6 +6,7 @@ import { createApiSuccessResponse } from '@/shared/utils.js';
 
 import {
   FLEET_ERROR_CODES,
+  FLEET_MAX_PANE_PATH_LENGTH,
   parseFleetReference,
   type FleetOperation,
   type FleetPaneReference,
@@ -17,11 +18,19 @@ import { FleetHostRoutingError, type FleetHostRoute } from './host-router.js';
 import type { RoutingResolver } from './host-qualified.routes.js';
 
 const REQUEST_DEADLINE_MS = 10_000;
+const MESSAGE_MAX = 100_000;
+const PROMPT_ID_MAX = 128;
 type BrowserPaneAction = 'send' | 'interrupt' | 'escape' | 'terminate-process' | 'terminate-pane' | 'terminate-session';
 
-function text(value: unknown, name: string): string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 256 || value.includes('\0')) {
+function text(value: unknown, name: string, maximum = 256): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > maximum || value.includes('\0')) {
     throw new FleetHostRoutingError('FLEET_IDENTIFIER_INVALID', `${name} is invalid.`);
+  }
+  return value;
+}
+function message(value: unknown, name: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0 || value.length > MESSAGE_MAX || value.includes('\0')) {
+    throw new FleetHostRoutingError('FLEET_MALFORMED_FRAME', `${name} is invalid.`);
   }
   return value;
 }
@@ -71,7 +80,7 @@ function choices(value: unknown): readonly number[] {
 }
 function pane(request: Request): FleetPaneReference {
   const input = body(request);
-  const target = parseFleetReference({ kind: 'pane', hostId: text(request.params.hostId, 'hostId'), localId: text(request.params.localId, 'localId'), lane: input.lane, tmux: input.tmux, process: input.process });
+  const target = parseFleetReference({ kind: 'pane', hostId: text(request.params.hostId, 'hostId'), localId: text(request.params.localId, 'localId', FLEET_MAX_PANE_PATH_LENGTH), lane: input.lane, tmux: input.tmux, process: input.process });
   if (target.kind !== 'pane') throw new FleetHostRoutingError('FLEET_MALFORMED_FRAME', 'Pane target is invalid.');
   return target;
 }
@@ -87,7 +96,7 @@ export function createHostQualifiedActionRoutes(resolve: RoutingResolver) {
       const input = body(request); const paneAction = action(input.action); const target = pane(request);
       const operation = paneAction === 'send' ? 'pane.input' : paneAction === 'interrupt' ? 'pane.interrupt' : paneAction === 'escape' ? 'pane.escape' : paneAction === 'terminate-process' ? 'process.terminate' : paneAction === 'terminate-pane' ? 'pane.terminate' : 'session.terminate';
       const peer = selected(request, resolve, operation); const mutation = peer.clients.mutations; const requestMeta = meta();
-      const result = paneAction === 'send' ? await mutation.sendPane(target, { ...requestMeta, message: text(input.message, 'message') }) : paneAction === 'interrupt' ? await mutation.interrupt(target, requestMeta) : paneAction === 'escape' ? await mutation.escape(target, requestMeta) : paneAction === 'terminate-process' ? await mutation.terminateProcess(target, requestMeta) : paneAction === 'terminate-pane' ? await mutation.terminatePane(target, requestMeta) : await mutation.terminateSession(target, requestMeta);
+      const result = paneAction === 'send' ? await mutation.sendPane(target, { ...requestMeta, message: message(input.message, 'message') }) : paneAction === 'interrupt' ? await mutation.interrupt(target, requestMeta) : paneAction === 'escape' ? await mutation.escape(target, requestMeta) : paneAction === 'terminate-process' ? await mutation.terminateProcess(target, requestMeta) : paneAction === 'terminate-pane' ? await mutation.terminatePane(target, requestMeta) : await mutation.terminateSession(target, requestMeta);
       response.json(createApiSuccessResponse(result));
     } catch (error) { next(failure(error)); }
   });
@@ -96,8 +105,8 @@ export function createHostQualifiedActionRoutes(resolve: RoutingResolver) {
       const input = body(request); const peer = selected(request, resolve, 'prompt.respond'); const requestMeta = meta(); const sessionId = text(request.params.sessionId, 'sessionId');
       if (input.response !== 'choices' && input.response !== 'custom') throw new FleetHostRoutingError('FLEET_MALFORMED_FRAME', 'Prompt response is invalid.');
       const result = input.response === 'choices'
-        ? await peer.clients.mutations.respondPrompt({ kind: 'session', hostId: peer.hostId, localId: sessionId }, { ...requestMeta, response: input.response, promptId: text(input.promptId, 'promptId'), choices: choices(input.choices) })
-        : await peer.clients.mutations.respondPrompt({ kind: 'session', hostId: peer.hostId, localId: sessionId }, { ...requestMeta, response: input.response, promptId: text(input.promptId, 'promptId'), message: text(input.message, 'message') });
+        ? await peer.clients.mutations.respondPrompt({ kind: 'session', hostId: peer.hostId, localId: sessionId }, { ...requestMeta, response: input.response, promptId: text(input.promptId, 'promptId', PROMPT_ID_MAX), choices: choices(input.choices) })
+        : await peer.clients.mutations.respondPrompt({ kind: 'session', hostId: peer.hostId, localId: sessionId }, { ...requestMeta, response: input.response, promptId: text(input.promptId, 'promptId', PROMPT_ID_MAX), message: message(input.message, 'message') });
       response.json(createApiSuccessResponse(result));
     } catch (error) { next(failure(error)); }
   });

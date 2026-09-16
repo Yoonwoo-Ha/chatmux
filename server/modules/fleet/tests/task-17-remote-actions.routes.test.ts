@@ -17,6 +17,19 @@ async function post(baseUrl: string, path: string, body: object): Promise<Respon
   });
 }
 
+test('Given a pane key longer than an identifier, when a remote action is posted, then admission does not use the 256-character id bound', async (t) => {
+  const fixture = await startRoutesFixture();
+  t.after(() => closeFixture(fixture.server));
+  const localId = `4:live${'k'.repeat(300)}`;
+
+  const response = await post(fixture.baseUrl, `/hosts/${PEER_A}/providers/panes/${encodeURIComponent(localId)}/actions`, {
+    ...pane, action: 'interrupt',
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(fixture.calls, [{ hostId: PEER_A, method: 'interrupt', localId }]);
+});
+
 test('Given colliding panes on two peers, when every pane action is posted, then only the addressed host is mutated with distinct semantics', async (t) => {
   const fixture = await startRoutesFixture();
   t.after(() => closeFixture(fixture.server));
@@ -58,6 +71,39 @@ test('Given a remote native prompt and approval, when the owner responds, then e
   assert.deepEqual(fixture.calls.slice(-2).map((call) => [call.hostId, call.method]), [
     [PEER_B, 'respondPrompt'], [PEER_B, 'respondApproval'],
   ]);
+});
+
+test('Given a peer pane send, when the message is a normal coding prompt, then the identifier bound is not reused', async (t) => {
+  const fixture = await startRoutesFixture();
+  t.after(() => closeFixture(fixture.server));
+  const message = 'x'.repeat(257);
+
+  const accepted = await post(fixture.baseUrl, `/hosts/${PEER_A}/providers/panes/collision-pane/actions`, {
+    ...pane, action: 'send', message,
+  });
+  const custom = await post(fixture.baseUrl, `/hosts/${PEER_B}/providers/sessions/${COLLIDING_SESSION}/prompt/respond`, {
+    response: 'custom', promptId: '0123456789abcdef0123456789abcdef', message,
+  });
+
+  assert.equal(accepted.status, 200);
+  assert.equal(custom.status, 200);
+  assert.deepEqual(fixture.calls.map((call) => call.method), ['sendPane', 'respondPrompt']);
+});
+
+test('Given a peer pane send, when the message is empty or over the mutation bound, then admission fails before mutation', async (t) => {
+  const fixture = await startRoutesFixture();
+  t.after(() => closeFixture(fixture.server));
+
+  const empty = await post(fixture.baseUrl, `/hosts/${PEER_A}/providers/panes/collision-pane/actions`, {
+    ...pane, action: 'send', message: '   ',
+  });
+  const oversized = await post(fixture.baseUrl, `/hosts/${PEER_A}/providers/panes/collision-pane/actions`, {
+    ...pane, action: 'send', message: 'x'.repeat(100_001),
+  });
+
+  assert.equal(empty.status, 400);
+  assert.equal(oversized.status, 400);
+  assert.equal(fixture.calls.length, 0);
 });
 
 test('Given an offline peer, when a destructive action is requested, then admission fails before mutation', async (t) => {
