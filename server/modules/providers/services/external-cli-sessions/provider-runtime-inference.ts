@@ -94,6 +94,23 @@ async function isCurrentClaudeGeneration(candidate: ClaudePaneReceiptCandidate):
 }
 
 /**
+ * True when the pid still names a running process. A parked receipt's pid comes
+ * from a directory listing rather than from the pane's process tree, so nothing
+ * else proves it is alive: the generation check closes that gap only when the
+ * receipt carries `procStart`, and a build that omits it — or a host without
+ * /proc — would otherwise accept a receipt an exited runtime left behind.
+ * EPERM means the pid exists under another user, which is still running.
+ */
+export function isRunningProcess(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/**
  * A Claude TUI can park its conversation into a background runtime and keep its
  * own, now inactive, session id in the pane receipt. The parked receipt names
  * the job it handed off, and the background runtime's receipt carries the same
@@ -115,7 +132,7 @@ async function resolveParkedClaudeReceipt(
     .filter((candidate): candidate is ClaudePaneReceiptCandidate => candidate !== null);
 
   const owner = selectParkedClaudeReceipt(receipts, parkedJobId);
-  if (!owner || !(await isCurrentClaudeGeneration(owner))) return null;
+  if (!owner || !isRunningProcess(owner.pid) || !(await isCurrentClaudeGeneration(owner))) return null;
   const realReceiptCwd = await realpath(owner.receipt.cwd).catch(() => null);
   return realReceiptCwd === realPaneCwd ? owner : null;
 }
