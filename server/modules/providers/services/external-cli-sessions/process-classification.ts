@@ -6,18 +6,32 @@ import { recordHostCommand } from '../host-command-metrics.service.js';
 import { isGjcProcessArgs } from '../live-sessions/process-contracts.js';
 import { tmuxPaneIdentityKey } from '../../../../../shared/tmux.js';
 
-import type { ExternalCliKind, ExternalCliSession, ExternalLocalCliKind, ExternalPane, ProcessTreeEntry, ExternalSessionBinding } from './contracts-and-resume.js';
-import { CLAUDE_SESSION_ID_RE, CODEX_THREAD_ID_RE, extractExternalResumeSessionId } from './contracts-and-resume.js';
+import type { ClaudeRuntimeReceipt, ExternalCliKind, ExternalCliSession, ExternalLocalCliKind, ExternalPane, ProcessTreeEntry, ExternalSessionBinding } from './contracts-and-resume.js';
+import { CLAUDE_RECEIPT_JOB_ID_RE, CLAUDE_RECEIPT_PANE_TAG_RE, CLAUDE_RECEIPT_PROC_START_RE, CLAUDE_SESSION_ID_RE, CODEX_THREAD_ID_RE, extractExternalResumeSessionId } from './contracts-and-resume.js';
 import type { CustomProcessEvidence, CustomTerminalAgentDetectionOptions } from './custom-terminal-agents.js';
 import { couldMatchCustomCommand, isCustomTerminalShellInvocation, matchesCustomTerminalAgent, readCustomProcessEvidence, readCustomTerminalAgents } from './custom-terminal-agents.js';
 
 
+function receiptText(value: unknown, pattern: RegExp): string | null {
+  const text = typeof value === 'number' && Number.isSafeInteger(value) ? String(value) : value;
+  return typeof text === 'string' && pattern.test(text) ? text : null;
+}
+
+/**
+ * Parses one `~/.claude/sessions/<pid>.json` receipt. The pid binding is the
+ * authorization; every other field is optional evidence that older Claude
+ * builds may omit, so an unreadable field degrades to null rather than
+ * discarding a receipt that is otherwise proven.
+ */
 export function parseClaudeRuntimeSession(
   value: unknown,
   expectedPid: number,
-): { sessionId: string; cwd: string } | null {
+): ClaudeRuntimeReceipt | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const receipt = value as { pid?: unknown; sessionId?: unknown; cwd?: unknown };
+  const receipt = value as {
+    pid?: unknown; sessionId?: unknown; cwd?: unknown;
+    kind?: unknown; tmux?: unknown; jobId?: unknown; parkedJobId?: unknown; procStart?: unknown;
+  };
   if (
     receipt.pid !== expectedPid
     || typeof receipt.sessionId !== 'string'
@@ -27,7 +41,15 @@ export function parseClaudeRuntimeSession(
   ) {
     return null;
   }
-  return { sessionId: receipt.sessionId, cwd: receipt.cwd };
+  return {
+    sessionId: receipt.sessionId,
+    cwd: receipt.cwd,
+    kind: receipt.kind === 'interactive' || receipt.kind === 'bg' ? receipt.kind : null,
+    tmux: receiptText(receipt.tmux, CLAUDE_RECEIPT_PANE_TAG_RE),
+    jobId: receiptText(receipt.jobId, CLAUDE_RECEIPT_JOB_ID_RE),
+    parkedJobId: receiptText(receipt.parkedJobId, CLAUDE_RECEIPT_JOB_ID_RE),
+    procStart: receiptText(receipt.procStart, CLAUDE_RECEIPT_PROC_START_RE),
+  };
 }
 
 export function processCliKind(proc: Pick<ProcessTreeEntry, 'comm' | 'args'>): ExternalLocalCliKind | 'gjc' | 'ssh' | null {
