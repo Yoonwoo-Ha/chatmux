@@ -3,7 +3,7 @@ export type { ExternalLocalCliKind, ExternalCliKind, ExternalCliSession, Externa
 export { selectMostRecentCodexThreadId, selectObservedCodexThread, isCodexMainThreadMetadata, assignFreshIndexedProviderSessionIds, assignUniqueIndexedProviderSessionIds, parseExternalPanes, parsePsTree } from './external-cli-sessions/session-correlation.js';
 export { parseClaudeRuntimeSession, isCodexRuntimeProcess, isClaudeRuntimeProcess, classifyExternalSessions, selectPrimaryCodexProcessPid } from './external-cli-sessions/process-classification.js';
 export type { ExternalCliSessionCommandRunner } from './external-cli-sessions/process-classification.js';
-export { extractContainedTranscriptSessionId, applyInferredProviderSessionIds, claudeReceiptPaneTag, selectClaudePaneReceipt, selectParkedClaudeReceipt } from './external-cli-sessions/provider-runtime-inference.js';
+export { extractContainedTranscriptSessionId, applyInferredProviderSessionIds, claudeReceiptPaneTag, isRunningProcess, selectClaudePaneReceipt, selectParkedClaudeReceipt } from './external-cli-sessions/provider-runtime-inference.js';
 export { normalizeExternalPaneOutput, resolveExternalCliCwd, withoutNodeModulesBins, buildExternalCliRuntimePath, resolveExternalCliExecutable, buildExternalCliTmuxSpawnArgs, spawnExternalCliSession } from './external-cli-sessions/inference-and-spawn.js';
 export type { ExternalSpawnCli, CurrentTmuxPaneIdentity } from './external-cli-sessions/inference-and-spawn.js';
 export { getCurrentTmuxPaneIdentityState, getCurrentTmuxPaneIdentity, resolveCodexRolloutPath, createExternalCliSessionDiscovery, getExternalCliSessionsDetailed } from './external-cli-sessions/discovery.js';

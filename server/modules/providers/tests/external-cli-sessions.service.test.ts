@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import test from 'node:test';
 
 import {
@@ -19,6 +20,7 @@ import {
   extractContainedTranscriptSessionId,
   isCodexRuntimeProcess,
   isClaudeRuntimeProcess,
+  isRunningProcess,
   normalizeExternalPaneOutput,
   parseClaudeRuntimeSession,
   parseExternalPanes,
@@ -962,6 +964,21 @@ test('selectClaudePaneReceipt fails closed when two interactive receipts claim o
     }),
     null,
   );
+});
+
+test('isRunningProcess separates a live pid from one an exited runtime left behind', async () => {
+  // The parked receipt's pid is read off disk, so a receipt outliving its
+  // process must not satisfy the job-id chain on builds that write no
+  // generation. This process is the live case.
+  assert.equal(isRunningProcess(process.pid), true);
+
+  const child = spawn(process.execPath, ['-e', '']);
+  const exitedPid = child.pid;
+  assert.ok(exitedPid !== undefined);
+  // 'close' fires after Node reaps the child, so the pid is fully gone rather
+  // than a zombie that would still answer signal 0.
+  await new Promise<void>((resolve) => { child.on('close', () => resolve()); });
+  assert.equal(isRunningProcess(exitedPid), false);
 });
 
 test('selectParkedClaudeReceipt follows the job id a parked pane receipt declares', () => {
