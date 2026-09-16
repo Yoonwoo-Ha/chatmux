@@ -41,6 +41,39 @@ export const CODEX_ROLLOUT_FILE_RE = /^rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a
 
 export const MAX_RUNTIME_DESCRIPTORS = 2_048;
 
+/** Runtime receipts read per pane subtree when resolving a Claude pane. */
+export const MAX_CLAUDE_PANE_RECEIPTS = 64;
+
+/** Receipt files scanned when following a parked Claude conversation. */
+export const MAX_CLAUDE_PARKED_RECEIPTS = 512;
+
+/** `<tmux session>:@<window>.%<pane>`, exactly as Claude writes it in a receipt. */
+export const CLAUDE_RECEIPT_PANE_TAG_RE = /^[^\u0000]{1,256}:@\d{1,10}\.%\d{1,10}$/;
+
+/** A Claude background job id: the leading segment of that job's session id. */
+export const CLAUDE_RECEIPT_JOB_ID_RE = /^[0-9a-f-]{6,64}$/i;
+
+/** Immutable /proc start ticks of the receipt's pid, used as its generation. */
+export const CLAUDE_RECEIPT_PROC_START_RE = /^\d{1,20}$/;
+
+/**
+ * The per-process receipt Claude writes to `~/.claude/sessions/<pid>.json`.
+ * One pane holds several of them once it runs background jobs: the interactive
+ * TUI, its daemon, and each background runtime. Only the fields ChatMux can
+ * verify are kept — a pane identity the receipt itself declares, the process
+ * generation, and the job ids that tie a parked conversation to the runtime
+ * that now owns it.
+ */
+export type ClaudeRuntimeReceipt = {
+  sessionId: string;
+  cwd: string;
+  kind: 'interactive' | 'bg' | null;
+  tmux: string | null;
+  jobId: string | null;
+  parkedJobId: string | null;
+  procStart: string | null;
+};
+
 export type ExternalLocalCliKind = 'claude' | 'codex' | 'cursor' | 'opencode' | 'omp' | 'omo';
 
 export type ExternalCliKind = ExternalLocalCliKind | 'ssh' | 'shell';

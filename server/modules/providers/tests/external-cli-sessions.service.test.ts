@@ -7,6 +7,7 @@ import {
   assignFreshIndexedProviderSessionIds,
   assignUniqueIndexedProviderSessionIds,
   classifyExternalSessions,
+  claudeReceiptPaneTag,
   buildExternalCliTmuxSpawnArgs,
   spawnExternalCliSession,
   buildExternalCliRuntimePath,
@@ -23,7 +24,9 @@ import {
   parseExternalPanes,
   parseProcessStartTime,
   parsePsTree,
+  selectClaudePaneReceipt,
   selectObservedCodexThread,
+  selectParkedClaudeReceipt,
   selectPrimaryCodexProcessPid,
   resolveExternalCliExecutable,
   withoutNodeModulesBins,
@@ -805,7 +808,15 @@ test('parseClaudeRuntimeSession accepts the PID-bound native Claude receipt', ()
       cwd: '/workspace/project',
       kind: 'interactive',
     }, 1443735),
-    { sessionId, cwd: '/workspace/project' },
+    {
+      sessionId,
+      cwd: '/workspace/project',
+      kind: 'interactive',
+      tmux: null,
+      jobId: null,
+      parkedJobId: null,
+      procStart: null,
+    },
   );
   assert.equal(
     parseClaudeRuntimeSession({ pid: 1443736, sessionId, cwd: '/workspace/project' }, 1443735),
@@ -813,6 +824,170 @@ test('parseClaudeRuntimeSession accepts the PID-bound native Claude receipt', ()
   );
   assert.equal(
     parseClaudeRuntimeSession({ pid: 1443735, sessionId: '../../bad', cwd: '/workspace/project' }, 1443735),
+    null,
+  );
+});
+
+test('parseClaudeRuntimeSession keeps the pane identity, generation and parked job of a receipt', () => {
+  const sessionId = '423c8f5f-26f3-4f94-8488-7f84e00eeead';
+  assert.deepEqual(
+    parseClaudeRuntimeSession({
+      pid: 3864372,
+      sessionId,
+      cwd: '/workspace/project',
+      kind: 'interactive',
+      tmux: 'Topk-Design:@19.%19',
+      parkedJobId: 'b5f0de92',
+      procStart: '70737698',
+    }, 3864372),
+    {
+      sessionId,
+      cwd: '/workspace/project',
+      kind: 'interactive',
+      tmux: 'Topk-Design:@19.%19',
+      jobId: null,
+      parkedJobId: 'b5f0de92',
+      procStart: '70737698',
+    },
+  );
+  // Optional evidence a build writes in an unusable shape degrades to null;
+  // the pid-bound receipt itself stays valid.
+  const malformed = parseClaudeRuntimeSession({
+    pid: 3864372,
+    sessionId,
+    cwd: '/workspace/project',
+    kind: 'detached',
+    tmux: 'Topk-Design',
+    parkedJobId: '../../escape',
+    procStart: 'not-a-tick',
+  }, 3864372);
+  assert.deepEqual(
+    malformed,
+    { sessionId, cwd: '/workspace/project', kind: null, tmux: null, jobId: null, parkedJobId: null, procStart: null },
+  );
+});
+
+test('claudeReceiptPaneTag reproduces the pane identity Claude writes into its receipt', () => {
+  assert.equal(
+    claudeReceiptPaneTag({ name: 'Topk-Design', tmux: tmux('$19', '@19', '%19') }),
+    'Topk-Design:@19.%19',
+  );
+});
+
+function claudeReceipt(
+  pid: number,
+  overrides: Partial<{
+    sessionId: string;
+    cwd: string;
+    kind: 'interactive' | 'bg' | null;
+    tmux: string | null;
+    jobId: string | null;
+    parkedJobId: string | null;
+    procStart: string | null;
+  }> = {},
+) {
+  return {
+    pid,
+    receipt: {
+      sessionId: '423c8f5f-26f3-4f94-8488-7f84e00eeead',
+      cwd: '/workspace/project',
+      kind: 'interactive' as 'interactive' | 'bg' | null,
+      tmux: null as string | null,
+      jobId: null as string | null,
+      parkedJobId: null as string | null,
+      procStart: null as string | null,
+      ...overrides,
+    },
+  };
+}
+
+test('selectClaudePaneReceipt picks the pane owner out of a subtree of background runtimes', () => {
+  // A Claude pane that spawned its daemon holds a receipt per runtime: the TUI,
+  // the daemon, and every background pty host. Only the TUI names the pane.
+  const owner = claudeReceipt(3864372, { tmux: 'Topk-Design:@19.%19', parkedJobId: 'b5f0de92' });
+  const selected = selectClaudePaneReceipt({
+    paneTag: 'Topk-Design:@19.%19',
+    runtimePidCount: 7,
+    candidates: [
+      claudeReceipt(3871559, { kind: 'bg', jobId: 'b5f0de92', sessionId: '149bf64c-47ff-4ffd-af56-7476b7d91681' }),
+      owner,
+      claudeReceipt(3871564, { kind: 'bg', jobId: '3c486c2a', sessionId: '3c486c2a-5fb8-4153-8a0c-279f3947ebe0' }),
+    ],
+  });
+  assert.equal(selected, owner);
+});
+
+test('selectClaudePaneReceipt keeps the single-runtime rule for receipts without a pane identity', () => {
+  const legacy = claudeReceipt(1443735);
+  assert.equal(
+    selectClaudePaneReceipt({ paneTag: 'Solo:@1.%1', runtimePidCount: 1, candidates: [legacy] }),
+    legacy,
+  );
+  // More than one runtime and nothing claiming the pane stays unresolved, so
+  // the pane falls back to verified terminal attach.
+  assert.equal(
+    selectClaudePaneReceipt({
+      paneTag: 'Solo:@1.%1',
+      runtimePidCount: 2,
+      candidates: [legacy, claudeReceipt(1443736)],
+    }),
+    null,
+  );
+  // A readable receipt cannot stand in for a second runtime whose receipt is
+  // missing: the pane owner is uncertain, so it fails closed.
+  assert.equal(
+    selectClaudePaneReceipt({ paneTag: 'Solo:@1.%1', runtimePidCount: 3, candidates: [legacy] }),
+    null,
+  );
+});
+
+test('selectClaudePaneReceipt fails closed when two interactive receipts claim one pane', () => {
+  assert.equal(
+    selectClaudePaneReceipt({
+      paneTag: 'Topk-Design:@19.%19',
+      runtimePidCount: 2,
+      candidates: [
+        claudeReceipt(3864372, { tmux: 'Topk-Design:@19.%19' }),
+        claudeReceipt(3864999, { tmux: 'Topk-Design:@19.%19' }),
+      ],
+    }),
+    null,
+  );
+  // A receipt claiming a different pane never resolves this one.
+  assert.equal(
+    selectClaudePaneReceipt({
+      paneTag: 'Topk-Design:@19.%19',
+      runtimePidCount: 1,
+      candidates: [claudeReceipt(3887427, { tmux: 'Codex-Mobile:@20.%20' })],
+    }),
+    null,
+  );
+});
+
+test('selectParkedClaudeReceipt follows the job id a parked pane receipt declares', () => {
+  const parked = claudeReceipt(3871559, {
+    kind: 'bg',
+    jobId: 'b5f0de92',
+    sessionId: '149bf64c-47ff-4ffd-af56-7476b7d91681',
+  });
+  const candidates = [
+    claudeReceipt(3864372, { tmux: 'Topk-Design:@19.%19', parkedJobId: 'b5f0de92' }),
+    parked,
+    claudeReceipt(3871564, { kind: 'bg', jobId: '3c486c2a' }),
+  ];
+  assert.equal(selectParkedClaudeReceipt(candidates, 'b5f0de92'), parked);
+  assert.equal(selectParkedClaudeReceipt(candidates, 'deadbeef'), null);
+  // An interactive receipt is never a background job, whatever id it carries.
+  assert.equal(
+    selectParkedClaudeReceipt([claudeReceipt(3864372, { jobId: 'b5f0de92' })], 'b5f0de92'),
+    null,
+  );
+  // Two runtimes answering to one job id is ambiguous and stays unresolved.
+  assert.equal(
+    selectParkedClaudeReceipt(
+      [parked, claudeReceipt(3871999, { kind: 'bg', jobId: 'b5f0de92' })],
+      'b5f0de92',
+    ),
     null,
   );
 });
