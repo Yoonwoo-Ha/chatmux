@@ -5,14 +5,120 @@ import { readFile, realpath, readdir } from 'node:fs/promises';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import { sessionsDb } from '@/modules/database/index.js';
 
-import { processStartMs } from '../process-start-time.service.js';
+import { parseProcStatStartTicks, processStartMs } from '../process-start-time.service.js';
 import { tmuxPaneIdentityKey } from '../../../../../shared/tmux.js';
 import { validateLocalAgentContext } from '../local-agent-context.service.js';
 
 import { descendants, isClaudeRuntimeProcess, parseClaudeRuntimeSession } from './process-classification.js';
 import { assignFreshIndexedProviderSessionIds, assignUniqueIndexedProviderSessionIds } from './session-correlation.js';
-import { MAX_RUNTIME_DESCRIPTORS, TRANSCRIPT_FILE_SESSION_ID_RE } from './contracts-and-resume.js';
-import type { ExternalCliSession, ExternalPane, ExternalSessionBinding, FreshIndexedProviderSession, ProcessTreeEntry } from './contracts-and-resume.js';
+import { MAX_CLAUDE_PANE_RECEIPTS, MAX_CLAUDE_PARKED_RECEIPTS, MAX_RUNTIME_DESCRIPTORS, TRANSCRIPT_FILE_SESSION_ID_RE } from './contracts-and-resume.js';
+import type { ClaudeRuntimeReceipt, ExternalCliSession, ExternalPane, ExternalSessionBinding, FreshIndexedProviderSession, ProcessTreeEntry } from './contracts-and-resume.js';
+
+export type ClaudePaneReceiptCandidate = {
+  pid: number;
+  receipt: ClaudeRuntimeReceipt;
+};
+
+/** The pane identity a Claude receipt declares: `<session>:@<window>.%<pane>`. */
+export function claudeReceiptPaneTag(pane: Pick<ExternalPane, 'name' | 'tmux'>): string {
+  return `${pane.name}:${pane.tmux.windowId}.${pane.tmux.paneId}`;
+}
+
+/**
+ * Picks the receipt of the Claude runtime that OWNS a pane. Counting processes
+ * cannot decide this: a pane running background jobs holds a receipt for the
+ * TUI, its daemon, and every background runtime, and only the TUI's receipt
+ * names the pane. Ambiguity fails closed. Receipts from builds that write no
+ * pane identity keep the previous rule — one runtime, one readable receipt —
+ * so existing bindings do not change.
+ */
+export function selectClaudePaneReceipt(args: {
+  paneTag: string;
+  runtimePidCount: number;
+  candidates: readonly ClaudePaneReceiptCandidate[];
+}): ClaudePaneReceiptCandidate | null {
+  const claimed = args.candidates.filter((candidate) => candidate.receipt.tmux === args.paneTag);
+  if (claimed.length > 0) {
+    const interactive = claimed.filter((candidate) => candidate.receipt.kind === 'interactive');
+    const owners = interactive.length > 0 ? interactive : claimed;
+    return owners.length === 1 ? owners[0] : null;
+  }
+  // A receipt that names a DIFFERENT pane is evidence of a mismatch, never a
+  // fallback: only a receipt with no pane identity at all can take this path.
+  const [only] = args.candidates;
+  return args.runtimePidCount === 1 && args.candidates.length === 1 && only.receipt.tmux === null
+    ? only
+    : null;
+}
+
+/** Picks the background runtime that a parked pane receipt handed its conversation to. */
+export function selectParkedClaudeReceipt(
+  candidates: readonly ClaudePaneReceiptCandidate[],
+  parkedJobId: string,
+): ClaudePaneReceiptCandidate | null {
+  const owners = candidates.filter((candidate) => (
+    candidate.receipt.kind === 'bg' && candidate.receipt.jobId === parkedJobId
+  ));
+  return owners.length === 1 ? owners[0] : null;
+}
+
+function claudeReceiptDirectory(): string {
+  return join(homedir(), '.claude', 'sessions');
+}
+
+async function readClaudeRuntimeReceipt(pid: number): Promise<ClaudePaneReceiptCandidate | null> {
+  try {
+    const receipt = parseClaudeRuntimeSession(
+      JSON.parse(await readFile(join(claudeReceiptDirectory(), `${pid}.json`), 'utf8')),
+      pid,
+    );
+    return receipt ? { pid, receipt } : null;
+  } catch {
+    // The Claude runtime receipt is best-effort and may disappear on exit.
+    return null;
+  }
+}
+
+/**
+ * True when the pid still runs the exact process the receipt was written for.
+ * The receipt carries the immutable /proc start tick of its own pid, so a
+ * reused pid cannot inherit a stale binding. Platforms without /proc keep the
+ * previous behavior, which had no generation to check.
+ */
+async function isCurrentClaudeGeneration(candidate: ClaudePaneReceiptCandidate): Promise<boolean> {
+  if (candidate.receipt.procStart === null || process.platform !== 'linux') return true;
+  const stat = await readFile(`/proc/${candidate.pid}/stat`, 'utf8').catch(() => null);
+  if (stat === null) return false;
+  const ticks = parseProcStatStartTicks(stat);
+  return ticks !== null && String(ticks) === candidate.receipt.procStart;
+}
+
+/**
+ * A Claude TUI can park its conversation into a background runtime and keep its
+ * own, now inactive, session id in the pane receipt. The parked receipt names
+ * the job it handed off, and the background runtime's receipt carries the same
+ * job id, so the conversation the pane actually displays is reached through
+ * that declared chain. The working directory only has to agree; it never
+ * authorizes the link on its own.
+ */
+async function resolveParkedClaudeReceipt(
+  parkedJobId: string,
+  realPaneCwd: string,
+): Promise<ClaudePaneReceiptCandidate | null> {
+  const entries = await readdir(claudeReceiptDirectory()).catch(() => []);
+  const pids = entries
+    .map((entry) => /^(\d{1,10})\.json$/.exec(entry)?.[1])
+    .filter((pid): pid is string => pid !== undefined)
+    .slice(0, MAX_CLAUDE_PARKED_RECEIPTS)
+    .map(Number);
+  const receipts = (await Promise.all(pids.map(readClaudeRuntimeReceipt)))
+    .filter((candidate): candidate is ClaudePaneReceiptCandidate => candidate !== null);
+
+  const owner = selectParkedClaudeReceipt(receipts, parkedJobId);
+  if (!owner || !(await isCurrentClaudeGeneration(owner))) return null;
+  const realReceiptCwd = await realpath(owner.receipt.cwd).catch(() => null);
+  return realReceiptCwd === realPaneCwd ? owner : null;
+}
 
 export async function inferClaudeSessionIds(args: {
   sessions: ExternalCliSession[];
@@ -34,39 +140,42 @@ export async function inferClaudeSessionIds(args: {
     children.set(proc.ppid, siblings);
   }
 
-  const candidates = new Map<string, Map<number, string>>();
+  const candidates = new Map<string, { paneTag: string; cwd: string; pids: number[] }>();
   for (const pane of args.panes) {
     const targetKey = tmuxPaneIdentityKey(pane.tmux);
     if (!claudeTargets.has(targetKey) || !pane.cwd) continue;
-    for (const pid of descendants(pane.pid, children)) {
+    const pids = descendants(pane.pid, children).filter((pid) => {
       const proc = procByPid.get(pid);
-      if (!proc || !isClaudeRuntimeProcess(proc)) continue;
-      const byPid = candidates.get(targetKey) ?? new Map<number, string>();
-      byPid.set(pid, pane.cwd);
-      candidates.set(targetKey, byPid);
+      return proc ? isClaudeRuntimeProcess(proc) : false;
+    });
+    if (pids.length > 0) {
+      candidates.set(targetKey, { paneTag: claudeReceiptPaneTag(pane), cwd: pane.cwd, pids });
     }
   }
 
   const resolved = new Map<string, string>();
-  await Promise.all([...candidates].map(async ([targetKey, byPid]) => {
-    if (byPid.size !== 1) return;
-    const [[pid, paneCwd]] = [...byPid];
-    try {
-      const receipt = parseClaudeRuntimeSession(
-        JSON.parse(await readFile(join(homedir(), '.claude', 'sessions', `${pid}.json`), 'utf8')),
-        pid,
-      );
-      if (!receipt) return;
-      const [realPaneCwd, realReceiptCwd] = await Promise.all([
-        realpath(paneCwd),
-        realpath(receipt.cwd),
-      ]);
-      if (realPaneCwd === realReceiptCwd) {
-        resolved.set(targetKey, receipt.sessionId);
-      }
-    } catch {
-      // The Claude runtime receipt is best-effort and may disappear on exit.
-    }
+  await Promise.all([...candidates].map(async ([targetKey, pane]) => {
+    const receipts = (await Promise.all(
+      pane.pids.slice(0, MAX_CLAUDE_PANE_RECEIPTS).map(readClaudeRuntimeReceipt),
+    )).filter((candidate): candidate is ClaudePaneReceiptCandidate => candidate !== null);
+
+    const owner = selectClaudePaneReceipt({
+      paneTag: pane.paneTag,
+      runtimePidCount: pane.pids.length,
+      candidates: receipts,
+    });
+    if (!owner || !(await isCurrentClaudeGeneration(owner))) return;
+
+    const [realPaneCwd, realReceiptCwd] = await Promise.all([
+      realpath(pane.cwd).catch(() => null),
+      realpath(owner.receipt.cwd).catch(() => null),
+    ]);
+    if (realPaneCwd === null || realPaneCwd !== realReceiptCwd) return;
+
+    const parked = owner.receipt.parkedJobId
+      ? await resolveParkedClaudeReceipt(owner.receipt.parkedJobId, realPaneCwd)
+      : null;
+    resolved.set(targetKey, (parked ?? owner).receipt.sessionId);
   }));
   return resolved;
 }
