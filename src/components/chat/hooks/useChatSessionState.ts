@@ -1119,6 +1119,14 @@ export function useChatSessionState({
     setVisibleMessageCount((prev) => prev + 100);
   }, []);
 
+  // The scroll handler is not the only way to ask for the next page: a view
+  // that cannot be scrolled still needs the action, so it is exposed directly.
+  const loadMoreMessages = useCallback(async () => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    await loadOlderMessages(container);
+  }, [loadOlderMessages]);
+
   return {
     chatMessages,
     addMessage,
@@ -1141,6 +1149,7 @@ export function useChatSessionState({
     visibleMessageCount,
     visibleMessages,
     loadEarlierMessages,
+    loadMoreMessages,
     loadAllMessages,
     refreshCurrentMessages,
     allMessagesLoaded,
