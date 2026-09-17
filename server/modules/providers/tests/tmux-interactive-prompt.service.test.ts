@@ -189,6 +189,27 @@ Esc to cancel · Tab to amend · ctrl+e to explain
     'No',
   ]);
 
+  const dangerousRmApproval = parseTmuxInteractivePrompt('claude', `
+Bash command
+
+  cd /tmp/empty && rm -rf * .
+  Remove generated files from an empty scratch directory
+
+│ Dangerous rm operation on statically-unresolvable target: /workspace/*
+
+Do you want to proceed?
+❯ 1. Yes
+  2. No
+
+Esc to cancel · Tab to amend
+`);
+  assert.equal(dangerousRmApproval?.kind, 'approval');
+  assert.match(dangerousRmApproval?.body ?? '', /Dangerous rm operation/);
+  assert.deepEqual(dangerousRmApproval?.options.map((option) => option.label), [
+    'Yes',
+    'No',
+  ]);
+
   const plan = parseTmuxInteractivePrompt('claude', `
 Ready to code?
 
