@@ -157,6 +157,7 @@
       "scrollToLoad": "上にスクロールしてさらに読み込む",
       "showingLast": "最新{{count}}件を表示（全{{total}}件）",
       "loadEarlier": "過去のメッセージを読み込む",
+      "loadAll": "すべてのメッセージを読み込む",
       "loadFullToolOutput": "完全な出力を読み込む",
       "loadingFullToolOutput": "完全な出力を読み込み中...",
       "fullToolOutputFailed": "完全な出力を読み込めませんでした。"

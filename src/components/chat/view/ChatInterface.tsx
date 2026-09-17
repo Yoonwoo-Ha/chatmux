@@ -78,6 +78,7 @@ function ChatInterface(props: ChatInterfaceProps) {
           visibleMessageCount={session.visibleMessageCount}
           visibleMessages={session.visibleMessages}
           loadEarlierMessages={session.loadEarlierMessages}
+          loadMoreMessages={session.loadMoreMessages}
           loadAllMessages={session.loadAllMessages}
           allMessagesLoaded={session.allMessagesLoaded}
           isLoadingAllMessages={session.isLoadingAllMessages}

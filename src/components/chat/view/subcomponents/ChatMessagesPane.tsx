@@ -17,6 +17,7 @@ import MessageComponent from './MessageComponent';
 import ProviderSelectionEmptyState from './ProviderSelectionEmptyState';
 import ToolGroupContainer from './ToolGroupContainer';
 import LoadAllMessagesOverlay from './LoadAllMessagesOverlay';
+import LoadMoreMessagesBar from './LoadMoreMessagesBar';
 import ConversationExcerptControl from './ConversationExcerptControl';
 
 interface ChatMessagesPaneProps {
@@ -53,6 +54,7 @@ interface ChatMessagesPaneProps {
   visibleMessageCount: number;
   visibleMessages: ChatMessage[];
   loadEarlierMessages: () => void;
+  loadMoreMessages: () => void;
   loadAllMessages: () => void;
   allMessagesLoaded: boolean;
   isLoadingAllMessages: boolean;
@@ -103,6 +105,7 @@ function ChatMessagesPane({
   visibleMessageCount,
   visibleMessages,
   loadEarlierMessages,
+  loadMoreMessages,
   loadAllMessages,
   allMessagesLoaded,
   isLoadingAllMessages,
@@ -219,16 +222,16 @@ function ChatMessagesPane({
             </div>
           )}
 
-          {/* Indicator showing there are more messages to load (hide when all loaded) */}
-          {hasMoreMessages && !isLoadingMoreMessages && !allMessagesLoaded && (
-            <div className="border-b border-gray-200 py-2 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
-              {totalMessages > 0 && (
-                <span>
-                  {t('session.messages.showingOf', { shown: sessionMessagesCount, total: totalMessages })}{' '}
-                  <span className="text-xs">{t('session.messages.scrollToLoad')}</span>
-                </span>
-              )}
-            </div>
+          {/* More messages to load: scrolling to the top still loads them, and
+              the same actions are clickable for views that cannot scroll. */}
+          {hasMoreMessages && !isLoadingMoreMessages && !allMessagesLoaded && totalMessages > 0 && (
+            <LoadMoreMessagesBar
+              shown={sessionMessagesCount}
+              total={totalMessages}
+              isLoading={isLoadingAllMessages}
+              onLoadMore={loadMoreMessages}
+              onLoadAll={loadAllMessages}
+            />
           )}
 
           <LoadAllMessagesOverlay
