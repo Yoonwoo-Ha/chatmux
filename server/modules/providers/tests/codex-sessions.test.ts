@@ -370,6 +370,97 @@ test('Codex history incrementally appends complete JSONL records', { concurrency
   }
 });
 
+test('Codex history renders asynchronous Question items and closes them on the framed reply', { concurrency: false }, async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'codex-async-question-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  await mkdir(workspacePath, { recursive: true });
+
+  try {
+    const sessionId = 'codex-async-question-history';
+    const transcriptPath = await writeCodexTranscript(tempRoot, sessionId, workspacePath);
+    const questions = [{ title: 'Which accelerator?', options: ['CUDA', 'CPU', 'NPU'] }];
+    await appendFile(transcriptPath, [
+      JSON.stringify({
+        type: 'response_item',
+        timestamp: '2026-09-14T00:00:00.000Z',
+        payload: {
+          type: 'function_call',
+          name: 'request_user_input_async',
+          arguments: JSON.stringify({ questions }),
+          call_id: 'async-question-1',
+        },
+      }),
+      // Current Codex also records the same prompt as an AgentMessage item.
+      // The stable call id must keep that second representation from duplicating the card.
+      JSON.stringify({
+        type: 'event_msg',
+        timestamp: '2026-09-14T00:00:00.001Z',
+        payload: {
+          type: 'item_completed',
+          item: {
+            type: 'AgentMessage',
+            id: 'async-question-1',
+            delivery: 'async',
+            questions,
+            content: [{ type: 'Text', text: 'Which accelerator?' }],
+          },
+        },
+      }),
+      JSON.stringify({
+        type: 'response_item',
+        timestamp: '2026-09-14T00:00:00.002Z',
+        payload: {
+          type: 'function_call_output',
+          call_id: 'async-question-1',
+          output: '{"accepted":true}',
+        },
+      }),
+      JSON.stringify({
+        type: 'event_msg',
+        timestamp: '2026-09-14T00:00:01.000Z',
+        payload: { type: 'task_complete' },
+      }),
+      '',
+    ].join('\n'), 'utf8');
+
+    await withIsolatedDatabase(async () => {
+      sessionsDb.createSession(
+        sessionId,
+        'codex',
+        workspacePath,
+        undefined,
+        undefined,
+        undefined,
+        transcriptPath,
+      );
+      const provider = new CodexSessionsProvider();
+      const pendingHistory = await provider.fetchHistory(sessionId);
+      const asks = pendingHistory.messages.filter((message) => message.toolName === 'AskUserQuestion');
+      assert.equal(asks.length, 1);
+      assert.equal(asks[0]?.toolId, 'codex-async:async-question-1');
+      assert.deepEqual(asks[0]?.toolInput, {
+        questions: [{
+          question: 'Which accelerator?',
+          options: [{ label: 'CUDA' }, { label: 'CPU' }, { label: 'NPU' }],
+        }],
+        _chatmux: { kind: 'codex-async-question', messageId: 'async-question-1' },
+      });
+      assert.equal(asks[0]?.toolResult, undefined);
+
+      await appendFile(transcriptPath, `${JSON.stringify({
+        type: 'event_msg',
+        timestamp: '2026-09-14T00:00:02.000Z',
+        payload: { type: 'user_message', message: '> Which accelerator?\n\nCUDA' },
+      })}\n`, 'utf8');
+      const answeredHistory = await provider.fetchHistory(sessionId);
+      const answered = answeredHistory.messages.find((message) => message.toolId === asks[0]?.toolId);
+      assert.deepEqual(answered?.toolResult, { content: 'CUDA', isError: false });
+    });
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('Codex history renders structured custom tool output without leaking transport blocks', { concurrency: false }, async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'codex-history-custom-tool-output-'));
   const workspacePath = path.join(tempRoot, 'workspace');

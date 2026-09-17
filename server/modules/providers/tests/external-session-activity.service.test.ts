@@ -297,6 +297,51 @@ test('all external provider parsers classify running, waiting, asking, and unkno
   }
 });
 
+test('Codex asynchronous Question remains INPUT through task completion until its framed reply', () => {
+  const question = line({
+    type: 'event_msg',
+    payload: {
+      type: 'item_completed',
+      item: {
+        type: 'AgentMessage',
+        id: 'async-1',
+        delivery: 'async',
+        questions: [{ title: 'Which accelerator?', options: ['CUDA', 'CPU'] }],
+      },
+    },
+  });
+  const complete = line({ type: 'event_msg', payload: { type: 'task_complete' } });
+  assert.equal(parseExternalJsonlActivity('codex', `${question}\n${complete}`), 'asking_user');
+
+  const reply = line({
+    type: 'event_msg',
+    payload: { type: 'user_message', message: '> Which accelerator?\n\nCUDA' },
+  });
+  assert.equal(parseExternalJsonlActivity('codex', `${question}\n${complete}\n${reply}`), 'running');
+
+  const responseItemReply = line({
+    type: 'response_item',
+    payload: {
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_text', text: '> Which accelerator?\n\nCUDA' }],
+    },
+  });
+  assert.equal(parseExternalJsonlActivity('codex', `${question}\n${complete}\n${responseItemReply}`), 'running');
+
+  const completedItemReply = line({
+    type: 'event_msg',
+    payload: {
+      type: 'item_completed',
+      item: {
+        type: 'UserMessage',
+        content: [{ type: 'text', text: '> Which accelerator?\n\nCUDA' }],
+      },
+    },
+  });
+  assert.equal(parseExternalJsonlActivity('codex', `${question}\n${complete}\n${completedItemReply}`), 'running');
+});
+
 test('default app-session lookup resolves qualified session metadata through the project join', async () => {
   await withIsolatedDatabase(async () => {
     sessionsDb.createSession(

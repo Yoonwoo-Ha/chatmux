@@ -181,6 +181,7 @@ const isAskingToolName = (value: string): boolean => {
   return normalized === 'ask'
     || normalized === 'askuserquestion'
     || normalized === 'requestuserinput'
+    || normalized === 'requestuserinputasync'
     || normalized === 'question'
     || normalized === 'permissionrequest';
 };
@@ -295,7 +296,68 @@ const parseClaudeEvidence = (records: JsonRecord[]): ExternalSessionParsedActivi
   return evidence('unknown', 'unknown');
 };
 
+const codexTextContent = (value: unknown): string => {
+  if (typeof value === 'string') return value;
+  if (!Array.isArray(value)) return '';
+  return value.map((part) => {
+    const item = asRecord(part);
+    const type = readString(item?.type)?.toLowerCase();
+    return type === 'input_text' || type === 'text'
+      ? (typeof item?.text === 'string' ? item.text : '')
+      : '';
+  }).join('');
+};
+
+const codexUserMessageText = (record: JsonRecord): string => {
+  const payload = asRecord(record.payload);
+  if (record.type === 'response_item'
+    && payload?.type === 'message'
+    && payload.role === 'user') {
+    return codexTextContent(payload.content);
+  }
+  if (record.type !== 'event_msg') return '';
+  if (payload?.type === 'user_message') {
+    return typeof payload.message === 'string' ? payload.message : '';
+  }
+  if (payload?.type !== 'item_completed') return '';
+  const item = asRecord(payload.item);
+  return readString(item?.type)?.toLowerCase().replace(/_/g, '') === 'usermessage'
+    ? codexTextContent(item?.content)
+    : '';
+};
+
+const hasPendingCodexAsyncQuestion = (records: JsonRecord[]): boolean => {
+  const pending: string[] = [];
+  for (const record of records) {
+    const payload = asRecord(record.payload);
+    if (record.type === 'event_msg') {
+      const nested = payload?.type === 'item_completed' ? asRecord(payload.item) : null;
+      const item = nested ?? payload;
+      const itemType = readString(item?.type)?.toLowerCase().replace(/_/g, '');
+      if (itemType === 'agentmessage' && item?.delivery === 'async' && Array.isArray(item.questions)) {
+        for (const rawQuestion of item.questions) {
+          const title = readString(asRecord(rawQuestion)?.title);
+          if (title) pending.push(title);
+        }
+      }
+    }
+    const message = codexUserMessageText(record);
+    if (message) {
+      for (let index = pending.length - 1; index >= 0; index -= 1) {
+        if (message.startsWith(`> ${pending[index]}\n\n`)) {
+          pending.splice(index, 1);
+          break;
+        }
+      }
+    }
+  }
+  return pending.length > 0;
+};
+
 const parseCodexEvidence = (records: JsonRecord[]): ExternalSessionParsedActivityEvidence => {
+  // Async Question returns from its tool immediately, so later tool output or
+  // task completion must not overwrite INPUT while a framed answer is pending.
+  if (hasPendingCodexAsyncQuestion(records)) return evidence('asking_user', 'none');
   for (let index = records.length - 1; index >= 0; index -= 1) {
     const record = records[index];
     const type = readString(record.type)?.toLowerCase();
@@ -312,7 +374,10 @@ const parseCodexEvidence = (records: JsonRecord[]): ExternalSessionParsedActivit
       if (payloadType === 'turn_failed' || payloadType === 'error') return evidence('waiting_user', 'failed');
       if (payloadType === 'task_complete' || payloadType === 'turn_complete') return evidence('waiting_user', 'reply_ready');
       if (containsAskingTool(payload)) return evidence('asking_user', 'none');
-      if (payloadType === 'task_started' || payloadType === 'user_message' || payloadType === 'turn_started') {
+      if (payloadType === 'task_started'
+        || payloadType === 'user_message'
+        || payloadType === 'turn_started'
+        || codexUserMessageText(record)) {
         return evidence('running', 'none');
       }
       continue;

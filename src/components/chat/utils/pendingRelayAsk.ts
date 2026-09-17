@@ -47,6 +47,13 @@ export function findPendingRelayAsk(messages: readonly ChatMessage[]): PendingRe
     const questions = input && typeof input === 'object' && !Array.isArray(input)
       ? (input as { questions?: unknown }).questions
       : null;
+    const marker = input && typeof input === 'object' && !Array.isArray(input)
+      ? (input as { _chatmux?: unknown })._chatmux
+      : null;
+    const codexAsync = marker !== null
+      && typeof marker === 'object'
+      && !Array.isArray(marker)
+      && (marker as { kind?: unknown }).kind === 'codex-async-question';
     if (!Array.isArray(questions) || questions.length !== 1) return null;
     let maxChoiceNumber = 0;
     for (const rawQuestion of questions) {
@@ -63,7 +70,7 @@ export function findPendingRelayAsk(messages: readonly ChatMessage[]): PendingRe
         || question.multi === true
         || question.multiSelect === true
         || !Array.isArray(question.options)
-        || question.options.length === 0
+        || (question.options.length === 0 && !codexAsync)
       ) return null;
       maxChoiceNumber = Math.max(maxChoiceNumber, question.options.length + 1);
     }

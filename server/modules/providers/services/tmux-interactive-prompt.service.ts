@@ -5,6 +5,7 @@ import { AppError } from '@/shared/utils.js';
 import type { TmuxRunner } from './builtin-relay.service.js';
 import {
   parseClaudeAskCustomInputScreen,
+  parseCodexAsyncAskCustomInputScreen,
   parseCodexAskCustomInputScreen,
   parseGjcAskCustomInputScreen,
   parseOmpAskCustomInputScreen,
@@ -26,6 +27,7 @@ const GJC_HINT_RE = /up\/down navigate\s+enter select\s+esc cancel/i;
 const OMP_SINGLE_HINT_RE = /enter select.*↑\/↓ move.*esc cancel/i;
 const OMP_MULTI_HINT_RE = /space\/enter toggle.*↑\/↓ move.*esc cancel/i;
 const CODEX_ASK_HINT_RE = /tab to add notes.*enter to submit answer.*esc to interrupt/i;
+const CODEX_ASYNC_ASK_HINT_RE = /(?:enter|return).*submit.*(?:ctrl\s*\+\s*\]|skip)/i;
 const CODEX_CONTINUE_HINT_RE = /press\s+enter\s+to\s+continue/i;
 const CLAUDE_ASK_HINT_RE = /enter to select.*↑\/↓ to navigate.*esc to cancel/i;
 const CODEX_APPROVAL_HEADER_RE =
@@ -58,6 +60,7 @@ type PromptProvider = 'gjc' | 'codex' | 'omp' | 'claude';
 type PromptResponder =
   | 'gjc-question'
   | 'codex-question'
+  | 'codex-async-question'
   | 'omp-question'
   | 'claude-question'
   | 'codex-menu'
@@ -404,6 +407,40 @@ function parseCodexQuestion(screen: string): ParsedPrompt | null {
   });
 }
 
+function parseCodexAsyncQuestion(screen: string): ParsedPrompt | null {
+  const lines = screen.replace(ANSI_RE, '').split(/\r?\n/);
+  const hintIndex = findLastIndex(lines, (line) => CODEX_ASYNC_ASK_HINT_RE.test(line));
+  if (hintIndex < 0) return null;
+  const rows = parseNumberedRows(lines, Math.max(0, hintIndex - 48), hintIndex);
+  if (rows.length > 0 && (!sequentialRows(rows) || rows.filter((row) => row.selected).length !== 1)) {
+    return null;
+  }
+  const customIndex = rows.findIndex((row) => /^Other\b/i.test(row.label));
+  if (rows.length > 0 && (customIndex !== rows.length - 1 || customIndex < 1)) return null;
+  const question = nearestQuestion(lines, rows[0]?.lineIndex ?? hintIndex);
+  if (!question) return null;
+  const options = rows.slice(0, customIndex < 0 ? 0 : customIndex).map((row) => ({
+    label: row.label,
+    ...(row.description ? { description: row.description } : {}),
+  }));
+  return finishPrompt({
+    kind: 'question',
+    title: 'Question',
+    question,
+    body: null,
+    options,
+    multiSelect: false,
+    customOptionNumber: options.length + 1,
+  }, 'codex', {
+    responder: 'codex-async-question',
+    menuLabels: rows.map((row) => row.label),
+    selectedIndex: rows.length === 0 ? 0 : rows.findIndex((row) => row.selected),
+    checkedOptionIndices: [],
+    customMenuIndex: customIndex < 0 ? 0 : customIndex,
+    rejectWithEscapeIndex: null,
+  });
+}
+
 function parseClaudeQuestion(screen: string): ParsedPrompt | null {
   const lines = screen.replace(ANSI_RE, '').split(/\r?\n/);
   const hintIndex = findLastIndex(lines, (line) => CLAUDE_ASK_HINT_RE.test(line));
@@ -584,6 +621,13 @@ function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
   }
   if (prompt.responder === 'codex-menu') return CODEX_CONTINUE_HINT_RE.test(last);
   if (prompt.responder === 'codex-question') return CODEX_ASK_HINT_RE.test(last);
+  if (prompt.responder === 'codex-async-question') {
+    return screen
+      .replace(ANSI_RE, '')
+      .split(/\r?\n/)
+      .slice(-4)
+      .some((line) => CODEX_ASYNC_ASK_HINT_RE.test(cleanLine(line)));
+  }
   if (prompt.responder === 'claude-question') return CLAUDE_ASK_HINT_RE.test(last);
   if (prompt.responder === 'codex-approval') {
     return /press enter to confirm|esc to cancel|^\d+\.\s+(?:No|Reject|Cancel|Deny)\b/i.test(last);
@@ -604,7 +648,12 @@ export function parseTmuxInteractivePrompt(
   const candidates = kind === 'gjc'
     ? [parseGjcQuestion(screen)]
     : kind === 'codex'
-      ? [parseCodexContinueMenu(screen), parseCodexQuestion(screen), parseCodexApproval(screen)]
+      ? [
+          parseCodexContinueMenu(screen),
+          parseCodexQuestion(screen),
+          parseCodexAsyncQuestion(screen),
+          parseCodexApproval(screen),
+        ]
       : kind === 'omp'
         ? [parseOmpQuestion(screen), parseOmpApproval(screen)]
         : kind === 'claude'
@@ -807,7 +856,11 @@ export async function answerTmuxInteractivePrompt(
   );
   const choices = validateChoices(prompt, requestedChoices);
   if (choices.length === 1 && choices[0] === 0) {
-    await sendTmuxSelectionKeys(target, ['Escape'], run);
+    await sendTmuxSelectionKeys(
+      target,
+      [prompt.responder === 'codex-async-question' ? 'S-Right' : 'Escape'],
+      run,
+    );
     promptCache.delete(targetKey(target));
     customPromptCache.delete(targetKey(target));
     return { action: 'cancel' };
@@ -830,6 +883,8 @@ export async function answerTmuxInteractivePrompt(
     }
     const keys = prompt.responder === 'codex-question'
       ? [...navigationKeys(prompt.customMenuIndex - prompt.selectedIndex), 'Tab' as const]
+      : prompt.responder === 'codex-async-question'
+        ? navigationKeys(Math.max(0, prompt.customMenuIndex - prompt.selectedIndex))
       : prompt.responder === 'claude-question' || prompt.responder === 'claude-plan'
         ? navigationKeys(prompt.customMenuIndex - prompt.selectedIndex)
         : [...navigationKeys(prompt.customMenuIndex - prompt.selectedIndex), 'Enter' as const];
@@ -872,6 +927,9 @@ function customInputIsActive(prompt: ParsedPrompt, screen: string): boolean {
   const question = questionForCustom(prompt);
   if (prompt.responder === 'gjc-question') return parseGjcAskCustomInputScreen(screen, question);
   if (prompt.responder === 'codex-question') return parseCodexAskCustomInputScreen(screen, question);
+  if (prompt.responder === 'codex-async-question') {
+    return parseCodexAsyncAskCustomInputScreen(screen, question);
+  }
   if (prompt.responder === 'omp-question') return parseOmpAskCustomInputScreen(screen, question);
   if (prompt.responder === 'claude-question') return parseClaudeAskCustomInputScreen(screen, question);
   if (prompt.responder === 'claude-plan') {

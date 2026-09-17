@@ -37,6 +37,21 @@ test('findPendingRelayAsk exposes the newest unanswered choice range', () => {
   }]), null);
 });
 
+test('findPendingRelayAsk accepts Codex asynchronous choice and free-text questions', () => {
+  const asyncQuestion = {
+    ...pending,
+    toolId: 'codex-async:question-1',
+    toolInput: {
+      questions: [{ question: 'Which accelerator?', options: [] }],
+      _chatmux: { kind: 'codex-async-question', messageId: 'question-1' },
+    },
+  };
+  assert.deepEqual(findPendingRelayAsk([asyncQuestion]), {
+    toolId: 'codex-async:question-1',
+    maxChoiceNumber: 1,
+  });
+});
+
 test('findPendingRelayAsk rejects multi-question asks so the screen-derived prompt stays active', () => {
   assert.equal(findPendingRelayAsk([{
     ...pending,
