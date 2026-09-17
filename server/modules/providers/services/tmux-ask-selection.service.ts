@@ -1,6 +1,8 @@
 import type { NormalizedMessage } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
 
+import { isCodexAsyncQuestionInput } from '../../../../shared/codex-async-question.js';
+
 import type { TmuxRunner } from './builtin-relay.service.js';
 import {
   captureTmuxPane,
@@ -16,8 +18,6 @@ const GJC_CUSTOM_HINT_RE = /enter submit\s+esc back to options/i;
 const CODEX_SELECTION_HINT_RE = /tab to add notes.*enter to submit answer.*esc to interrupt/i;
 const CODEX_CUSTOM_HINT_RE = /tab or esc to clear notes.*enter to submit answer/i;
 const CODEX_ASYNC_HINT_RE = /(?:enter|return).*submit.*(?:ctrl\s*\+\s*\]|skip)/i;
-const CODEX_ASYNC_SUMMARY_RE = /\?\s+\d+\s+questions?/i;
-const CODEX_ASYNC_OPEN_HINT_RE = /\bto answer\b/i;
 const OMP_SELECTION_HINT_RE = /enter select.*↑\/↓ move.*esc cancel/i;
 const OMP_CUSTOM_HINT_RE = /enter or ctrl\+q submit.*esc cancel/i;
 const CLAUDE_SELECTION_HINT_RE = /enter to select.*↑\/↓ to navigate.*esc to cancel/i;
@@ -67,11 +67,7 @@ function parseToolInput(value: unknown): unknown {
 function readQuestions(value: unknown): ParsedTmuxAskQuestions | null {
   const input = parseToolInput(value);
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
-  const marker = (input as { _chatmux?: unknown })._chatmux;
-  const interaction = marker
-    && typeof marker === 'object'
-    && !Array.isArray(marker)
-    && (marker as { kind?: unknown }).kind === 'codex-async-question'
+  const interaction = isCodexAsyncQuestionInput(input)
     ? 'codex-async' as const
     : undefined;
   const questions = (input as { questions?: unknown }).questions;
@@ -89,7 +85,7 @@ function readQuestions(value: unknown): ParsedTmuxAskQuestions | null {
     if (item.multi === true || item.multiSelect === true) return null;
     const question = typeof item.question === 'string' ? item.question.trim() : '';
     if (!question || question.length > 2_000 || !Array.isArray(item.options)) return null;
-    if ((item.options.length === 0 && interaction !== 'codex-async') || item.options.length > 32) return null;
+    if (item.options.length === 0 || item.options.length > 32) return null;
     const options: Array<{ label: string }> = [];
     for (const rawOption of item.options) {
       if (!rawOption || typeof rawOption !== 'object' || Array.isArray(rawOption)) return null;
@@ -271,7 +267,8 @@ export function parseCodexAsyncAskSelectionScreen(
   if (
     !Number.isInteger(optionIndex)
     || optionIndex < -1
-    || optionIndex > labels.length
+    || optionIndex >= labels.length
+    || labels.length === 0
     || labels.some((label) => !label)
   ) return null;
   const lines = screen.replace(ANSI_RE, '').split(/\r?\n/);
@@ -281,16 +278,7 @@ export function parseCodexAsyncAskSelectionScreen(
     }
     return -1;
   })();
-  if (hintIndex < 0) return null;
-
-  if (labels.length === 0) {
-    const context = normalizeText(lines.slice(Math.max(0, hintIndex - 20), hintIndex).join(' '));
-    if (!context.includes(normalizeText(question.question))) return null;
-    if (optionIndex === -1) return { action: 'cancel', delta: 0, label: 'Cancel' };
-    return optionIndex === 0
-      ? { action: 'other', delta: 0, label: 'Direct input' }
-      : null;
-  }
+  if (hintIndex < Math.max(0, lines.length - 4)) return null;
 
   const rowCount = labels.length + 1;
   for (let start = Math.max(0, hintIndex - rowCount - 20); start < hintIndex; start += 1) {
@@ -302,21 +290,12 @@ export function parseCodexAsyncAskSelectionScreen(
       || !optionMatches(rows[labels.length]?.text ?? '', CODEX_ASYNC_OTHER_LABEL)
       || !questionIsVisible(lines, start, question.question)
     ) continue;
+    if (rows.filter((row) => row?.selected).length !== 1) return null;
     const selectedIndex = rows.findIndex((row) => row?.selected);
-    if (selectedIndex < 0) return null;
     if (optionIndex === -1) return { action: 'cancel', delta: 0, label: 'Cancel' };
-    if (optionIndex === labels.length) {
-      return { action: 'other', delta: labels.length - selectedIndex, label: 'Direct input' };
-    }
     return { action: 'option', delta: optionIndex - selectedIndex, label: labels[optionIndex] };
   }
   return null;
-}
-
-function codexAsyncQuestionSummaryIsVisible(screen: string): boolean {
-  const lines = screen.replace(ANSI_RE, '').split(/\r?\n/).map(normalizeText);
-  return lines.some((line) => CODEX_ASYNC_SUMMARY_RE.test(line))
-    && lines.some((line) => CODEX_ASYNC_OPEN_HINT_RE.test(line));
 }
 
 function parseOmpMenuLine(rawLine: string): MenuLine {
@@ -476,15 +455,12 @@ export function parseCodexAskCustomInputScreen(
 }
 
 export function parseCodexAsyncAskCustomInputScreen(
-  screen: string,
-  question: TmuxAskQuestion,
+  _screen: string,
+  _question: TmuxAskQuestion,
 ): boolean {
-  const directInput = parseCodexAsyncAskSelectionScreen(
-    screen,
-    question,
-    question.options.length,
-  );
-  return directInput?.action === 'other' && directInput.delta === 0;
+  // Codex does not currently expose a stable, captured focus marker for this
+  // field. Typing without one could target an unrelated live widget.
+  return false;
 }
 
 export function parseOmpAskCustomInputScreen(
@@ -563,17 +539,7 @@ export async function answerPendingTmuxAskSelection(
     throw stalePromptError(target.kind);
   }
   const codexAsync = pending.interaction === 'codex-async' && target.kind === 'codex';
-  let screen = await captureTmuxPane(target, run);
-  if (
-    codexAsync
-    && !pending.questions.some((question) =>
-      parseCodexAsyncAskSelectionScreen(screen, question, optionIndex))
-  ) {
-    if (!codexAsyncQuestionSummaryIsVisible(screen)) throw stalePromptError(target.kind);
-    await sendTmuxSelectionKeys(target, ['S-Left'], run);
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    screen = await captureTmuxPane(target, run);
-  }
+  const screen = await captureTmuxPane(target, run);
   let matched: (AskSelection & { questionIndex: number }) | null = null;
   for (let questionIndex = 0; questionIndex < pending.questions.length; questionIndex += 1) {
     const selection = codexAsync

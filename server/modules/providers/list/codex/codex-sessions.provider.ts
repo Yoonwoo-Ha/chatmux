@@ -6,8 +6,12 @@ import type { IProviderSessions } from '@/shared/interfaces.js';
 import type { AnyRecord, FetchHistoryOptions, FetchHistoryResult, NormalizedMessage } from '@/shared/types.js';
 import { createNormalizedMessage, generateMessageId, readObjectRecord, sliceTailPage } from '@/shared/utils.js';
 
+import {
+  CODEX_ASYNC_QUESTION_KIND,
+  isCodexAsyncQuestionInput,
+} from '../../../../../shared/codex-async-question.js';
+
 const PROVIDER = 'codex';
-const CODEX_ASYNC_QUESTION_KIND = 'codex-async-question';
 
 export function normalizeCodexToolName(value: unknown): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -193,17 +197,6 @@ function codexAsyncQuestionItem(payload: AnyRecord | null | undefined): AnyRecor
     : null;
 }
 
-function isCodexAsyncQuestionInput(value: unknown): value is AnyRecord {
-  const input = typeof value === 'string'
-    ? (() => {
-        try { return JSON.parse(value) as unknown; } catch { return null; }
-      })()
-    : value;
-  const record = readObjectRecord(input);
-  const marker = readObjectRecord(record?._chatmux);
-  return marker?.kind === CODEX_ASYNC_QUESTION_KIND;
-}
-
 function linkCodexAsyncQuestionAnswer(
   messages: readonly NormalizedMessage[],
   userMessage: NormalizedMessage,
@@ -227,6 +220,13 @@ function linkCodexAsyncQuestionAnswer(
     if (typeof question !== 'string') continue;
     const prefix = `> ${question}\n\n`;
     if (!content.startsWith(prefix)) continue;
+    candidate.toolInput = {
+      ...input,
+      answers: {
+        ...readObjectRecord(input.answers),
+        [question]: content.slice(prefix.length),
+      },
+    };
     candidate.toolResult = {
       content: content.slice(prefix.length),
       isError: false,

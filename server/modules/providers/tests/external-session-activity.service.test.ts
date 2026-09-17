@@ -297,7 +297,7 @@ test('all external provider parsers classify running, waiting, asking, and unkno
   }
 });
 
-test('Codex asynchronous Question remains INPUT through task completion until its framed reply', () => {
+test('Codex asynchronous Question is cleared by terminal outcomes and exact framed replies', () => {
   const question = line({
     type: 'event_msg',
     payload: {
@@ -311,13 +311,24 @@ test('Codex asynchronous Question remains INPUT through task completion until it
     },
   });
   const complete = line({ type: 'event_msg', payload: { type: 'task_complete' } });
-  assert.equal(parseExternalJsonlActivity('codex', `${question}\n${complete}`), 'asking_user');
+  assert.deepEqual(
+    parseExternalJsonlActivityEvidence('codex', `${question}\n${complete}`),
+    { activity: 'waiting_user', terminalOutcome: 'reply_ready' },
+  );
+  assert.deepEqual(
+    parseExternalJsonlActivityEvidence('codex', `${question}\n${line({ type: 'turn_failed' })}`),
+    { activity: 'waiting_user', terminalOutcome: 'failed' },
+  );
+  assert.deepEqual(
+    parseExternalJsonlActivityEvidence('codex', `${question}\n${line({ type: 'turn_aborted' })}`),
+    { activity: 'waiting_user', terminalOutcome: 'none' },
+  );
 
   const reply = line({
     type: 'event_msg',
     payload: { type: 'user_message', message: '> Which accelerator?\n\nCUDA' },
   });
-  assert.equal(parseExternalJsonlActivity('codex', `${question}\n${complete}\n${reply}`), 'running');
+  assert.equal(parseExternalJsonlActivity('codex', `${question}\n${reply}`), 'running');
 
   const responseItemReply = line({
     type: 'response_item',
@@ -327,7 +338,7 @@ test('Codex asynchronous Question remains INPUT through task completion until it
       content: [{ type: 'input_text', text: '> Which accelerator?\n\nCUDA' }],
     },
   });
-  assert.equal(parseExternalJsonlActivity('codex', `${question}\n${complete}\n${responseItemReply}`), 'running');
+  assert.equal(parseExternalJsonlActivity('codex', `${question}\n${responseItemReply}`), 'running');
 
   const completedItemReply = line({
     type: 'event_msg',
@@ -339,7 +350,13 @@ test('Codex asynchronous Question remains INPUT through task completion until it
       },
     },
   });
-  assert.equal(parseExternalJsonlActivity('codex', `${question}\n${complete}\n${completedItemReply}`), 'running');
+  assert.equal(parseExternalJsonlActivity('codex', `${question}\n${completedItemReply}`), 'running');
+
+  assert.equal(
+    parseExternalJsonlActivity('codex', `${complete}\n${question}`),
+    'asking_user',
+    'a new question after a terminal boundary starts a new pending state',
+  );
 });
 
 test('default app-session lookup resolves qualified session metadata through the project join', async () => {

@@ -326,10 +326,41 @@ const codexUserMessageText = (record: JsonRecord): string => {
     : '';
 };
 
-const hasPendingCodexAsyncQuestion = (records: JsonRecord[]): boolean => {
+const parseCodexEvidence = (records: JsonRecord[]): ExternalSessionParsedActivityEvidence => {
   const pending: string[] = [];
+  let current = evidence('unknown', 'unknown');
   for (const record of records) {
     const payload = asRecord(record.payload);
+    const type = readString(record.type)?.toLowerCase();
+    const payloadType = readString(payload?.type)?.toLowerCase();
+    if (type === 'turn_aborted' || payloadType === 'turn_aborted') {
+      pending.length = 0;
+      current = evidence('waiting_user', 'none');
+      continue;
+    }
+    if (
+      type === 'turn_failed'
+      || type === 'error'
+      || payloadType === 'turn_failed'
+      || payloadType === 'error'
+      || isErrorRecord(record)
+      || isErrorRecord(payload ?? {})
+    ) {
+      pending.length = 0;
+      current = evidence('waiting_user', 'failed');
+      continue;
+    }
+    if (
+      type === 'turn_complete'
+      || payloadType === 'task_complete'
+      || payloadType === 'turn_complete'
+    ) {
+      pending.length = 0;
+      current = evidence('waiting_user', 'reply_ready');
+      continue;
+    }
+
+    let addedQuestion = false;
     if (record.type === 'event_msg') {
       const nested = payload?.type === 'item_completed' ? asRecord(payload.item) : null;
       const item = nested ?? payload;
@@ -337,10 +368,18 @@ const hasPendingCodexAsyncQuestion = (records: JsonRecord[]): boolean => {
       if (itemType === 'agentmessage' && item?.delivery === 'async' && Array.isArray(item.questions)) {
         for (const rawQuestion of item.questions) {
           const title = readString(asRecord(rawQuestion)?.title);
-          if (title) pending.push(title);
+          if (title) {
+            pending.push(title);
+            addedQuestion = true;
+          }
         }
       }
     }
+    if (addedQuestion) {
+      current = evidence('asking_user', 'none');
+      continue;
+    }
+
     const message = codexUserMessageText(record);
     if (message) {
       for (let index = pending.length - 1; index >= 0; index -= 1) {
@@ -349,53 +388,45 @@ const hasPendingCodexAsyncQuestion = (records: JsonRecord[]): boolean => {
           break;
         }
       }
+      current = pending.length > 0
+        ? evidence('asking_user', 'none')
+        : evidence('running', 'none');
+      continue;
     }
-  }
-  return pending.length > 0;
-};
 
-const parseCodexEvidence = (records: JsonRecord[]): ExternalSessionParsedActivityEvidence => {
-  // Async Question returns from its tool immediately, so later tool output or
-  // task completion must not overwrite INPUT while a framed answer is pending.
-  if (hasPendingCodexAsyncQuestion(records)) return evidence('asking_user', 'none');
-  for (let index = records.length - 1; index >= 0; index -= 1) {
-    const record = records[index];
-    const type = readString(record.type)?.toLowerCase();
-    const payload = asRecord(record.payload);
-    const payloadType = readString(payload?.type)?.toLowerCase();
-
-    if (type === 'turn_aborted') return evidence('waiting_user', 'none');
-    if (type === 'turn_failed' || type === 'error' || isErrorRecord(record) || isErrorRecord(payload ?? {})) {
-      return evidence('waiting_user', 'failed');
-    }
-    if (type === 'turn_complete') return evidence('waiting_user', 'reply_ready');
     if (type === 'event_msg') {
-      if (payloadType === 'turn_aborted') return evidence('waiting_user', 'none');
-      if (payloadType === 'turn_failed' || payloadType === 'error') return evidence('waiting_user', 'failed');
-      if (payloadType === 'task_complete' || payloadType === 'turn_complete') return evidence('waiting_user', 'reply_ready');
-      if (containsAskingTool(payload)) return evidence('asking_user', 'none');
+      if (containsAskingTool(payload)) {
+        current = evidence('asking_user', 'none');
+        continue;
+      }
       if (payloadType === 'task_started'
-        || payloadType === 'user_message'
-        || payloadType === 'turn_started'
-        || codexUserMessageText(record)) {
-        return evidence('running', 'none');
+        || payloadType === 'turn_started') {
+        current = pending.length > 0
+          ? evidence('asking_user', 'none')
+          : evidence('running', 'none');
       }
       continue;
     }
     if (type === 'response_item') {
-      if (payloadType === 'error' || payloadType === 'turn_failed' || (payload?.error !== null && payload?.error !== undefined)) {
-        return evidence('waiting_user', 'failed');
+      if (containsAskingTool(payload)) {
+        current = evidence('asking_user', 'none');
+        continue;
       }
-      if (containsAskingTool(payload)) return evidence('asking_user', 'none');
       const role = readString(payload?.role);
       if (role === 'user' || containsToolCall(payload) || payloadType === 'function_call_output' || role === 'assistant') {
-        return evidence('running', 'none');
+        current = pending.length > 0
+          ? evidence('asking_user', 'none')
+          : evidence('running', 'none');
       }
       continue;
     }
-    if (type === 'turn_context') return evidence('running', 'none');
+    if (type === 'turn_context') {
+      current = pending.length > 0
+        ? evidence('asking_user', 'none')
+        : evidence('running', 'none');
+    }
   }
-  return evidence('unknown', 'unknown');
+  return current;
 };
 
 const parseCursorEvidence = (records: JsonRecord[]): ExternalSessionParsedActivityEvidence => {

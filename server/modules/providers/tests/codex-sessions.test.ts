@@ -378,50 +378,13 @@ test('Codex history renders asynchronous Question items and closes them on the f
   try {
     const sessionId = 'codex-async-question-history';
     const transcriptPath = await writeCodexTranscript(tempRoot, sessionId, workspacePath);
-    const questions = [{ title: 'Which accelerator?', options: ['CUDA', 'CPU', 'NPU'] }];
-    await appendFile(transcriptPath, [
-      JSON.stringify({
-        type: 'response_item',
-        timestamp: '2026-09-14T00:00:00.000Z',
-        payload: {
-          type: 'function_call',
-          name: 'request_user_input_async',
-          arguments: JSON.stringify({ questions }),
-          call_id: 'async-question-1',
-        },
-      }),
-      // Current Codex also records the same prompt as an AgentMessage item.
-      // The stable call id must keep that second representation from duplicating the card.
-      JSON.stringify({
-        type: 'event_msg',
-        timestamp: '2026-09-14T00:00:00.001Z',
-        payload: {
-          type: 'item_completed',
-          item: {
-            type: 'AgentMessage',
-            id: 'async-question-1',
-            delivery: 'async',
-            questions,
-            content: [{ type: 'Text', text: 'Which accelerator?' }],
-          },
-        },
-      }),
-      JSON.stringify({
-        type: 'response_item',
-        timestamp: '2026-09-14T00:00:00.002Z',
-        payload: {
-          type: 'function_call_output',
-          call_id: 'async-question-1',
-          output: '{"accepted":true}',
-        },
-      }),
-      JSON.stringify({
-        type: 'event_msg',
-        timestamp: '2026-09-14T00:00:01.000Z',
-        payload: { type: 'task_complete' },
-      }),
-      '',
-    ].join('\n'), 'utf8');
+    // Sanitized from a real Codex rollout: current Codex writes the function
+    // call and a duplicate AgentMessage with the same stable id.
+    const fixture = readFileSync(path.join(
+      process.cwd(),
+      'server/modules/providers/tests/fixtures/codex-async-question-rollout.jsonl',
+    ), 'utf8');
+    await appendFile(transcriptPath, `${fixture.trimEnd()}\n`, 'utf8');
 
     await withIsolatedDatabase(async () => {
       sessionsDb.createSession(
@@ -455,6 +418,14 @@ test('Codex history renders asynchronous Question items and closes them on the f
       const answeredHistory = await provider.fetchHistory(sessionId);
       const answered = answeredHistory.messages.find((message) => message.toolId === asks[0]?.toolId);
       assert.deepEqual(answered?.toolResult, { content: 'CUDA', isError: false });
+      assert.deepEqual(answered?.toolInput, {
+        questions: [{
+          question: 'Which accelerator?',
+          options: [{ label: 'CUDA' }, { label: 'CPU' }, { label: 'NPU' }],
+        }],
+        answers: { 'Which accelerator?': 'CUDA' },
+        _chatmux: { kind: 'codex-async-question', messageId: 'async-question-1' },
+      });
     });
   } finally {
     await rm(tempRoot, { recursive: true, force: true });

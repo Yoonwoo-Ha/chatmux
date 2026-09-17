@@ -412,7 +412,7 @@ function parseCodexAsyncQuestion(screen: string): ParsedPrompt | null {
   const hintIndex = findLastIndex(lines, (line) => CODEX_ASYNC_ASK_HINT_RE.test(line));
   if (hintIndex < 0) return null;
   const rows = parseNumberedRows(lines, Math.max(0, hintIndex - 48), hintIndex);
-  if (rows.length > 0 && (!sequentialRows(rows) || rows.filter((row) => row.selected).length !== 1)) {
+  if (rows.length === 0 || !sequentialRows(rows) || rows.filter((row) => row.selected).length !== 1) {
     return null;
   }
   const customIndex = rows.findIndex((row) => /^Other\b/i.test(row.label));
@@ -430,13 +430,15 @@ function parseCodexAsyncQuestion(screen: string): ParsedPrompt | null {
     body: null,
     options,
     multiSelect: false,
-    customOptionNumber: options.length + 1,
+    // The native Other row has no captured focused-input marker yet, so do
+    // not expose it as an actionable ChatMux choice.
+    customOptionNumber: null,
   }, 'codex', {
     responder: 'codex-async-question',
     menuLabels: rows.map((row) => row.label),
-    selectedIndex: rows.length === 0 ? 0 : rows.findIndex((row) => row.selected),
+    selectedIndex: rows.findIndex((row) => row.selected),
     checkedOptionIndices: [],
-    customMenuIndex: customIndex < 0 ? 0 : customIndex,
+    customMenuIndex: null,
     rejectWithEscapeIndex: null,
   });
 }
@@ -776,7 +778,6 @@ function navigationKeys(delta: number): TmuxSelectionKey[] {
 function validateChoices(prompt: ParsedPrompt, choices: readonly number[]): number[] {
   if (
     choices.length === 0
-    || choices.length > prompt.options.length
     || choices.some((choice) => !Number.isInteger(choice))
   ) {
     throw new AppError('A valid displayed choice number is required.', {
@@ -799,6 +800,12 @@ function validateChoices(prompt: ParsedPrompt, choices: readonly number[]): numb
     });
   }
   const unique = [...new Set(choices)];
+  if (prompt.multiSelect && unique.length > prompt.options.length) {
+    throw new AppError('Too many choices were selected.', {
+      code: 'TMUX_INTERACTIVE_CHOICE_INVALID',
+      statusCode: 400,
+    });
+  }
   if (!prompt.multiSelect && unique.length !== 1) {
     throw new AppError('This prompt accepts one choice.', {
       code: 'TMUX_INTERACTIVE_CHOICE_INVALID',

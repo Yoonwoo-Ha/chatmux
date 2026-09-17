@@ -90,13 +90,13 @@ enter submit   ctrl + ] skip
 option 1/4   shift + → main prompt
 `;
 
-test('Codex asynchronous Question parser maps options, direct input, and cancel', () => {
+test('Codex asynchronous Question parser maps visible options and cancel only', () => {
   const asyncQuestion = {
     question: 'Which accelerator?',
     options: [{ label: 'CUDA' }, { label: 'CPU' }, { label: 'NPU' }],
   };
   assert.equal(parseCodexAsyncAskSelectionScreen(codexAsyncQuestionScreen, asyncQuestion, 1)?.label, 'CPU');
-  assert.equal(parseCodexAsyncAskSelectionScreen(codexAsyncQuestionScreen, asyncQuestion, 3)?.action, 'other');
+  assert.equal(parseCodexAsyncAskSelectionScreen(codexAsyncQuestionScreen, asyncQuestion, 3), null);
   assert.equal(parseCodexAsyncAskSelectionScreen(codexAsyncQuestionScreen, asyncQuestion, -1)?.action, 'cancel');
   assert.equal(
     parseCodexAsyncAskSelectionScreen(
@@ -113,7 +113,15 @@ test('Codex asynchronous Question parser maps options, direct input, and cancel'
         .replace('  4. Other', '› 4. Other'),
       asyncQuestion,
     ),
-    true,
+    false,
+  );
+  assert.equal(
+    parseCodexAsyncAskSelectionScreen(
+      `${codexAsyncQuestionScreen}\nworking in another widget\n`,
+      asyncQuestion,
+      0,
+    ),
+    null,
   );
 });
 
@@ -221,35 +229,24 @@ test('pending transcript ask accepts only the newest unanswered single-select to
     toolInput: { questions: [{ ...question, multiSelect: true }] },
   }], 'ask-1'), null);
 
-  assert.deepEqual(findPendingTmuxAsk([{
+  assert.equal(findPendingTmuxAsk([{
     ...base,
     toolId: 'codex-async:question-1',
     toolInput: {
       questions: [{ question: 'Free-form question?', options: [] }],
       _chatmux: { kind: 'codex-async-question', messageId: 'question-1' },
     },
-  }], 'codex-async:question-1'), {
-    toolId: 'codex-async:question-1',
-    questions: [{ question: 'Free-form question?', options: [] }],
-    interaction: 'codex-async',
-  });
+  }], 'codex-async:question-1'), null);
 });
 
-test('Codex asynchronous Question opens from the collapsed stack before answering', async () => {
+test('Codex asynchronous Question never sends a key from an identity-less collapsed stack', async () => {
   const calls: string[][] = [];
-  let expanded = false;
   const run: TmuxRunner = async (args) => {
     calls.push(args);
     if (args.includes('capture-pane')) {
-      return {
-        code: 0,
-        output: expanded
-          ? codexAsyncQuestionScreen
-          : '? 1 question\nshift + ← to answer\n',
-      };
+      return { code: 0, output: '? 1 question\nshift + ← to answer\n' };
     }
     if (args.includes('display-message')) return { code: 0, output: '$7\t@8\t%9\n' };
-    if (args.includes('send-keys') && args.at(-1) === 'S-Left') expanded = true;
     return { code: 0, output: '' };
   };
   const target = createVerifiedTmuxActionTarget(
@@ -273,14 +270,36 @@ test('Codex asynchronous Question opens from the collapsed stack before answerin
     interaction: 'codex-async' as const,
   };
 
-  assert.deepEqual(await answerPendingTmuxAskSelection(target, pending, 1, run), {
-    questionIndex: 0,
-    action: 'option',
-    label: 'CPU',
-  });
+  await assert.rejects(
+    () => answerPendingTmuxAskSelection(target, pending, 1, run),
+    (error: unknown) => error instanceof Error
+      && 'code' in error
+      && error.code === 'TMUX_ASK_PROMPT_STALE',
+  );
+  assert.equal(calls.some((args) => args.includes('send-keys')), false);
+});
+
+test('Codex asynchronous Question answers an exact already-open option menu', async () => {
+  const calls: string[][] = [];
+  const run: TmuxRunner = async (args) => {
+    calls.push(args);
+    if (args.includes('capture-pane')) return { code: 0, output: codexAsyncQuestionScreen };
+    if (args.includes('display-message')) return { code: 0, output: '$7\t@8\t%9\n' };
+    return { code: 0, output: '' };
+  };
+  const target = createVerifiedTmuxActionTarget(
+    { socketPath: '/tmp/chatmux-test.sock', sessionId: '$7', windowId: '@8', paneId: '%9' },
+    { pid: 42, startedAtMs: 1234 }, 'codex', 'test', 'codex-session',
+  );
+  const pending = {
+    toolId: 'codex-async:question-1',
+    questions: [{ question: 'Which accelerator?', options: [{ label: 'CUDA' }, { label: 'CPU' }, { label: 'NPU' }] }],
+    interaction: 'codex-async' as const,
+  };
+  assert.equal((await answerPendingTmuxAskSelection(target, pending, 1, run)).label, 'CPU');
   assert.deepEqual(
     calls.filter((args) => args.includes('send-keys')).map((args) => args.at(-1)),
-    ['S-Left', 'Down', 'Enter'],
+    ['Down', 'Enter'],
   );
 });
 

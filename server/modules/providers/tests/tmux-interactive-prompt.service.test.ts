@@ -82,7 +82,13 @@ option 1/4   shift + → main prompt
   assert.equal(prompt?.kind, 'question');
   assert.equal(prompt?.question, 'Which accelerator?');
   assert.deepEqual(prompt?.options.map((option) => option.label), ['CUDA', 'CPU', 'NPU']);
-  assert.equal(prompt?.customOptionNumber, 4);
+  assert.equal(prompt?.customOptionNumber, null);
+  assert.equal(parseTmuxInteractivePrompt('codex', `
+Why this backend?
+
+enter submit   ctrl + ] skip
+shift + → main prompt
+`), null);
 });
 
 test('answers a Codex pre-chat menu with its native cursor and Enter keys', async () => {
