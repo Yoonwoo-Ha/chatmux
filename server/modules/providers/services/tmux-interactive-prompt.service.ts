@@ -545,18 +545,22 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
 
   const requiredIndex = findLastIndex(lines, (line) =>
     /This command requires approval/i.test(cleanLine(line)));
+  const dangerousRmIndex = findLastIndex(lines, (line) =>
+    /^Dangerous rm operation\b/i.test(cleanLine(line)));
+  const approvalIndex = Math.max(requiredIndex, dangerousRmIndex);
   const questionIndex = findLastIndex(lines, (line) => /^Do you want to proceed\?$/i.test(cleanLine(line)));
-  if (requiredIndex < 0 || questionIndex < requiredIndex) return null;
+  if (approvalIndex < 0 || questionIndex < approvalIndex) return null;
   const rows = parseNumberedRows(lines, questionIndex + 1, lines.length);
   if (!sequentialRows(rows) || rows.length < 2 || rows.filter((row) => row.selected).length !== 1) {
     return null;
   }
-  const title = nearestQuestion(lines, requiredIndex) ?? 'Command approval';
+  const title = nearestQuestion(lines, approvalIndex) ?? 'Command approval';
+  const bodyEnd = dangerousRmIndex > requiredIndex ? questionIndex : approvalIndex;
   return finishPrompt({
     kind: 'approval',
     title,
     question: cleanLine(lines[questionIndex]),
-    body: lines.slice(Math.max(0, requiredIndex - 8), requiredIndex).map(cleanLine).filter((line) =>
+    body: lines.slice(Math.max(0, approvalIndex - 8), bodyEnd).map(cleanLine).filter((line) =>
       line && !isDivider(line)).join('\n').slice(0, 12_000) || null,
     options: rows.map((row) => ({ label: row.label })),
     multiSelect: false,
