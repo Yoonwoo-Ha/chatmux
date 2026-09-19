@@ -134,6 +134,33 @@ test('Claude turn_duration closes an interrupted input without creating a comple
   ].join('\n')), 'running');
 });
 
+test('Claude compact summaries leave the session ready without emitting a reply completion', () => {
+  assert.deepEqual(
+    parseExternalJsonlActivityEvidence('claude', [
+      line({ type: 'system', subtype: 'compact_boundary' }),
+      line({
+        type: 'user',
+        isCompactSummary: true,
+        message: { role: 'user', content: 'Compacted conversation context' },
+      }),
+      line({
+        type: 'user',
+        isMeta: true,
+        message: { role: 'user', content: '<local-command-caveat>internal</local-command-caveat>' },
+      }),
+      line({
+        type: 'user',
+        message: { role: 'user', content: '<command-name>/compact</command-name>' },
+      }),
+      line({
+        type: 'user',
+        message: { role: 'user', content: '<local-command-stdout>Compacted</local-command-stdout>' },
+      }),
+    ].join('\n')),
+    { activity: 'waiting_user', terminalOutcome: 'none' },
+  );
+});
+
 test('Claude API overloaded responses are promoted to ERROR evidence', () => {
   const overloaded = {
     type: 'error',

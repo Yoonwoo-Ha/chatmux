@@ -17,7 +17,8 @@
     "tool": "도구",
     "claude": "Claude",
     "cursor": "Cursor",
-    "codex": "Codex"
+    "codex": "Codex",
+    "compactSummary": "압축된 대화 내용"
   },
   "tools": {
     "settings": "도구 설정",

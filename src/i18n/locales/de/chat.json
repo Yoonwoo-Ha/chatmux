@@ -17,7 +17,8 @@
     "tool": "Werkzeug",
     "claude": "Claude",
     "cursor": "Cursor",
-    "codex": "Codex"
+    "codex": "Codex",
+    "compactSummary": "Komprimierter Kontext"
   },
   "tools": {
     "settings": "Werkzeugeinstellungen",

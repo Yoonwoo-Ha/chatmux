@@ -17,7 +17,8 @@
     "tool": "Araç",
     "claude": "Claude",
     "cursor": "Cursor",
-    "codex": "Codex"
+    "codex": "Codex",
+    "compactSummary": "Sıkıştırılmış bağlam"
   },
   "tools": {
     "settings": "Araç Ayarları",
