@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import TestRenderer, { act } from 'react-test-renderer';
 
 import '../../../../i18n/config';
 import type { ChatMessage } from '../../types/types';
@@ -31,6 +32,45 @@ test('standalone conversation errors keep details collapsed and defer the full b
   assert.match(html, /<summary[^>]*>[\s\S]*Request failed[\s\S]*<\/summary>/);
   assert.doesNotMatch(html, /Internal stack line/);
   assert.equal((html.match(/>Error</g) || []).length, 1);
+});
+
+test('compact summaries render as a collapsed disclosure without mounting the body', () => {
+  const message: ChatMessage = {
+    type: 'assistant',
+    content: 'private compacted context sentinel',
+    timestamp: '2026-09-18T00:00:00.000Z',
+    isCompactSummary: true,
+  };
+  const html = renderMessage(message);
+
+  assert.match(html, /<details(?![^>]*\sopen(?:=|\s|>))[^>]*>/);
+  assert.match(html, /Compacted context/);
+  assert.doesNotMatch(html, /private compacted context sentinel/);
+});
+
+test('opening a compact summary disclosure mounts its body', async (t) => {
+  let renderer!: TestRenderer.ReactTestRenderer;
+  await act(async () => {
+    renderer = TestRenderer.create(createElement(MessageComponent, {
+      message: {
+        type: 'assistant',
+        content: 'expanded compacted context sentinel',
+        timestamp: '2026-09-18T00:00:00.000Z',
+        isCompactSummary: true,
+      },
+      prevMessage: null,
+      createDiff: () => [],
+      provider: 'claude',
+    }));
+  });
+  t.after(() => act(() => renderer.unmount()));
+
+  assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /expanded compacted context sentinel/);
+  const details = renderer.root.findByType('details');
+  await act(async () => {
+    details.props.onToggle({ currentTarget: { open: true } });
+  });
+  assert.match(JSON.stringify(renderer.toJSON()), /expanded compacted context sentinel/);
 });
 
 test('non-Bash tool failures defer full output behind a collapsed disclosure', () => {

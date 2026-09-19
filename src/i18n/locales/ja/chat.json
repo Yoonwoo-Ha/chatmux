@@ -17,7 +17,8 @@
     "tool": "ツール",
     "claude": "Claude",
     "cursor": "Cursor",
-    "codex": "Codex"
+    "codex": "Codex",
+    "compactSummary": "圧縮されたコンテキスト"
   },
   "tools": {
     "settings": "ツール設定",

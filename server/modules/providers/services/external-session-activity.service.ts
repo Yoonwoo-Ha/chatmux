@@ -254,6 +254,14 @@ const isErrorRecord = (record: JsonRecord): boolean => (
   || (record.error !== null && record.error !== undefined)
 );
 
+const isClaudeLocalCommandUserRecord = (record: JsonRecord, message: JsonRecord | null): boolean => {
+  if (record.isMeta === true) return true;
+  const content = typeof message?.content === 'string' ? message.content.trimStart() : '';
+  return content.startsWith('<command-name>')
+    || content.startsWith('<local-command-stdout>')
+    || content.startsWith('<local-command-caveat>');
+};
+
 const parseClaudeEvidence = (records: JsonRecord[]): ExternalSessionParsedActivityEvidence => {
   let turnEnded = false;
   for (let index = records.length - 1; index >= 0; index -= 1) {
@@ -279,8 +287,14 @@ const parseClaudeEvidence = (records: JsonRecord[]): ExternalSessionParsedActivi
       continue;
     }
     if (type !== 'assistant' && type !== 'user') continue;
+    // Claude persists the completed /compact result as a synthetic user row.
+    // It is context for the next turn, not a newly submitted prompt.
+    if (type === 'user' && record.isCompactSummary === true) {
+      return evidence('waiting_user', 'none');
+    }
     const role = readString(message?.role) ?? type;
     if (role === 'user') {
+      if (isClaudeLocalCommandUserRecord(record, message)) continue;
       return turnEnded
         ? evidence('waiting_user', 'none')
         : evidence('running', 'none');

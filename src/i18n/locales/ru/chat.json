@@ -17,7 +17,8 @@
     "tool": "Инструмент",
     "claude": "Claude",
     "cursor": "Cursor",
-    "codex": "Codex"
+    "codex": "Codex",
+    "compactSummary": "Сжатый контекст"
   },
   "tools": {
     "settings": "Настройки инструмента",

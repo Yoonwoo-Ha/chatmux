@@ -69,11 +69,15 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
   const { fullToolResult, isLoadingFullToolResult, fullToolResultError, loadFullToolResult } = useFullToolResult(message.sessionId, message.toolId);
   const [isToolErrorOpen, setIsToolErrorOpen] = useState(false);
   const [isConversationErrorOpen, setIsConversationErrorOpen] = useState(false);
+  const [isCompactSummaryOpen, setIsCompactSummaryOpen] = useState(false);
   useEffect(() => {
     setIsToolErrorOpen(false);
   }, [message.sessionId, message.toolId]);
   useEffect(() => {
     setIsConversationErrorOpen(false);
+  }, [message.sessionId, message.timestamp, message.content]);
+  useEffect(() => {
+    setIsCompactSummaryOpen(false);
   }, [message.sessionId, message.timestamp, message.content]);
   const effectiveToolResult = message.toolResult;
   const errorContent = String(message.content || '');
@@ -90,7 +94,8 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
   const shouldShowAssistantCopyControl = message.type === 'assistant' &&
     assistantCopyContent.trim().length > 0 &&
     !isCommandOrFileEditToolResponse &&
-    !message.isThinking;
+    !message.isThinking &&
+    !message.isCompactSummary;
 
 
   const formattedTime = useMemo(() => new Date(message.timestamp).toLocaleTimeString(), [message.timestamp]);
@@ -372,6 +377,34 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                   </div>
                 </div>
               </div>
+            ) : message.isCompactSummary ? (
+              <details
+                className="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-sm"
+                onToggle={(event) => setIsCompactSummaryOpen(event.currentTarget.open)}
+              >
+                <summary className="flex cursor-pointer list-none items-center gap-2 text-muted-foreground [&::-webkit-details-marker]:hidden">
+                  <svg
+                    aria-hidden="true"
+                    className="details-chevron h-4 w-4 flex-shrink-0"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                  <span className="font-medium">{t('messageTypes.compactSummary')}</span>
+                </summary>
+                {isCompactSummaryOpen && (
+                  <div className="mt-3 border-t border-border/60 pt-3">
+                    <Markdown className="prose prose-sm prose-gray max-w-none font-serif dark:prose-invert">
+                      {formattedMessageContent}
+                    </Markdown>
+                    <div className="mt-3 flex items-center text-[11px]">
+                      <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
+                    </div>
+                  </div>
+                )}
+              </details>
             ) : message.isThinking ? (
               /* Thinking messages — Reasoning component (ai-elements pattern) */
               <Reasoning defaultOpen={false}>

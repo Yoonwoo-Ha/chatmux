@@ -17,7 +17,8 @@
     "tool": "工具",
     "claude": "Claude",
     "cursor": "Cursor",
-    "codex": "Codex"
+    "codex": "Codex",
+    "compactSummary": "已壓縮的上下文"
   },
   "tools": {
     "settings": "工具設定",
